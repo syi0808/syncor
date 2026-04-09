@@ -92,8 +92,7 @@ impl DaemonManager {
         };
 
         // Use `kill(pid, 0)` — succeeds (returns 0) if the process exists.
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
-        alive
+        (unsafe { libc::kill(pid, 0) }) == 0
     }
 
     /// Remove a stale PID file and Unix-domain socket that were left behind

@@ -1,6 +1,6 @@
+use std::fs;
 use syncor_core::sync::save::SavePipeline;
 use tempfile::TempDir;
-use std::fs;
 
 #[test]
 fn save_creates_snapshot_for_new_files() {

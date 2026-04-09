@@ -1,2 +1,2 @@
-pub mod watcher;
 pub mod poller;
+pub mod watcher;

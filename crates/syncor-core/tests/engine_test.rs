@@ -1,9 +1,9 @@
-use syncor_core::sync::engine::SyncEngine;
-use syncor_core::transport::git::GitTransport;
+use std::fs;
 use syncor_core::config::SyncorPaths;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::sync::engine::SyncEngine;
+use syncor_core::transport::git::GitTransport;
 use tempfile::TempDir;
-use std::fs;
 
 fn setup() -> (TempDir, TempDir, TempDir, LinkInfo) {
     let workspace = TempDir::new().unwrap();

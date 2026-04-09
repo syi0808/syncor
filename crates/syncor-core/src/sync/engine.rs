@@ -32,7 +32,8 @@ impl LinkLock {
             .write(true)
             .truncate(false)
             .open(&lock_path)?;
-        file.try_lock_exclusive().map_err(|_| SyncorError::LockHeld)?;
+        file.try_lock_exclusive()
+            .map_err(|_| SyncorError::LockHeld)?;
         Ok(Self { _file: file })
     }
 }
@@ -121,12 +122,7 @@ impl SyncEngine {
                 })
             }
             PushResult::Conflict { details } => {
-                db.append_log(
-                    link.id.as_str(),
-                    "push",
-                    "conflict",
-                    Some(&details.message),
-                )?;
+                db.append_log(link.id.as_str(), "push", "conflict", Some(&details.message))?;
                 Err(SyncorError::Conflict(details.message))
             }
         }
@@ -142,15 +138,11 @@ impl SyncEngine {
         let pull_result = self.transport.pull(link, &store_dir)?;
 
         match pull_result {
-            PullResult::UpToDate => {
-                return Ok(PullSyncResult {
-                    restored: false,
-                    files_restored: 0,
-                });
-            }
-            PullResult::Conflict { details } => {
-                return Err(SyncorError::Conflict(details.message));
-            }
+            PullResult::UpToDate => Ok(PullSyncResult {
+                restored: false,
+                files_restored: 0,
+            }),
+            PullResult::Conflict { details } => Err(SyncorError::Conflict(details.message)),
             PullResult::Success { revision } => {
                 // The catalog in the repo dir (store_dir) is the remote catalog.
                 // We keep a local copy under the link dir for merging.
@@ -171,9 +163,9 @@ impl SyncEngine {
                 }
 
                 let catalog = MetadataCatalog::open(&local_catalog_path)?;
-                let latest_remote = catalog.latest_snapshot()?.ok_or_else(|| {
-                    SyncorError::Other("no snapshots in remote catalog".into())
-                })?;
+                let latest_remote = catalog
+                    .latest_snapshot()?
+                    .ok_or_else(|| SyncorError::Other("no snapshots in remote catalog".into()))?;
 
                 let db = self.state_db()?;
                 let sync_state = db.get_sync_state(link.id.as_str())?;

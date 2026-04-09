@@ -1,5 +1,5 @@
-use syncor_core::watch::poller::Poller;
 use std::time::Duration;
+use syncor_core::watch::poller::Poller;
 use tokio::sync::mpsc;
 
 #[tokio::test]

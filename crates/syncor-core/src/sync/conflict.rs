@@ -71,7 +71,8 @@ pub fn detect_conflicts(
     let mut actions = Vec::new();
 
     // Collect all paths across all three manifests.
-    let all_paths: HashSet<&String> = base.keys()
+    let all_paths: HashSet<&String> = base
+        .keys()
         .chain(local.keys())
         .chain(remote.keys())
         .collect();
@@ -87,7 +88,10 @@ pub fn detect_conflicts(
 
             // (A, A, B) — remote changed, local untouched → apply remote
             (Some(bh), Some(lh), Some(rh)) if bh == lh && lh != rh => {
-                Some(FileAction::ApplyRemote { path: path.clone(), remote_hash: *rh })
+                Some(FileAction::ApplyRemote {
+                    path: path.clone(),
+                    remote_hash: *rh,
+                })
             }
 
             // (A, B, A) — local changed, remote untouched → keep local (no-op)
@@ -97,32 +101,29 @@ pub fn detect_conflicts(
             (Some(_bh), Some(lh), Some(rh)) if lh == rh => None,
 
             // (A, B, C) — all three differ → conflict
-            (Some(bh), Some(lh), Some(rh)) => {
-                Some(FileAction::Conflict(Conflict {
-                    path: path.clone(),
-                    base_hash: Some(*bh),
-                    local_hash: Some(*lh),
-                    remote_hash: Some(*rh),
-                }))
-            }
+            (Some(bh), Some(lh), Some(rh)) => Some(FileAction::Conflict(Conflict {
+                path: path.clone(),
+                base_hash: Some(*bh),
+                local_hash: Some(*lh),
+                remote_hash: Some(*rh),
+            })),
 
             // (-, B, -) — local added, remote doesn't have it → no-op
             (None, Some(_lh), None) => None,
 
             // (-, -, B) — remote added, local doesn't have it → apply remote
-            (None, None, Some(rh)) => {
-                Some(FileAction::ApplyRemote { path: path.clone(), remote_hash: *rh })
-            }
+            (None, None, Some(rh)) => Some(FileAction::ApplyRemote {
+                path: path.clone(),
+                remote_hash: *rh,
+            }),
 
             // (-, B, C) — both added with different content → conflict
-            (None, Some(lh), Some(rh)) if lh != rh => {
-                Some(FileAction::Conflict(Conflict {
-                    path: path.clone(),
-                    base_hash: None,
-                    local_hash: Some(*lh),
-                    remote_hash: Some(*rh),
-                }))
-            }
+            (None, Some(lh), Some(rh)) if lh != rh => Some(FileAction::Conflict(Conflict {
+                path: path.clone(),
+                base_hash: None,
+                local_hash: Some(*lh),
+                remote_hash: Some(*rh),
+            })),
 
             // (-, B, B) — both added with same content → no-op
             (None, Some(_lh), Some(_rh)) => None,
@@ -131,14 +132,12 @@ pub fn detect_conflicts(
             (Some(bh), None, Some(rh)) if bh == rh => None,
 
             // (A, -, B) — local deleted, remote changed → conflict
-            (Some(bh), None, Some(rh)) => {
-                Some(FileAction::Conflict(Conflict {
-                    path: path.clone(),
-                    base_hash: Some(*bh),
-                    local_hash: None,
-                    remote_hash: Some(*rh),
-                }))
-            }
+            (Some(bh), None, Some(rh)) => Some(FileAction::Conflict(Conflict {
+                path: path.clone(),
+                base_hash: Some(*bh),
+                local_hash: None,
+                remote_hash: Some(*rh),
+            })),
 
             // (A, A, -) — remote deleted, local unchanged → delete local
             (Some(bh), Some(lh), None) if bh == lh => {
@@ -146,14 +145,12 @@ pub fn detect_conflicts(
             }
 
             // (A, B, -) — local changed, remote deleted → conflict
-            (Some(bh), Some(lh), None) => {
-                Some(FileAction::Conflict(Conflict {
-                    path: path.clone(),
-                    base_hash: Some(*bh),
-                    local_hash: Some(*lh),
-                    remote_hash: None,
-                }))
-            }
+            (Some(bh), Some(lh), None) => Some(FileAction::Conflict(Conflict {
+                path: path.clone(),
+                base_hash: Some(*bh),
+                local_hash: Some(*lh),
+                remote_hash: None,
+            })),
 
             // (A, -, -) — both deleted → no-op
             (Some(_bh), None, None) => None,

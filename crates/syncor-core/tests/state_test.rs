@@ -1,4 +1,4 @@
-use syncor_core::sync::state::{StateDb, SyncState, ConflictRecord, SyncLogEntry};
+use syncor_core::sync::state::{ConflictRecord, StateDb, SyncLogEntry, SyncState};
 use tempfile::TempDir;
 
 #[test]
@@ -78,7 +78,8 @@ fn append_and_list_sync_log() {
     let dir = TempDir::new().unwrap();
     let db = StateDb::open(dir.path().join("state.db")).unwrap();
     db.append_log("abc", "push", "success", None).unwrap();
-    db.append_log("abc", "pull", "error", Some("network timeout")).unwrap();
+    db.append_log("abc", "pull", "error", Some("network timeout"))
+        .unwrap();
     let logs = db.list_log("abc", Some(10)).unwrap();
     assert_eq!(logs.len(), 2);
     assert_eq!(logs[0].action, "pull"); // most recent first

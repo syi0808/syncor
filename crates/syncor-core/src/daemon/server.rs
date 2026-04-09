@@ -147,9 +147,7 @@ async fn send_response(
     write_half: &mut tokio::net::unix::OwnedWriteHalf,
     resp: &IpcResponse,
 ) -> std::io::Result<()> {
-    let mut bytes = serde_json::to_vec(resp).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    })?;
+    let mut bytes = serde_json::to_vec(resp).map_err(std::io::Error::other)?;
     bytes.push(b'\n');
     write_half.write_all(&bytes).await
 }
@@ -172,9 +170,7 @@ impl IpcClient {
         // keep the stream around for multiple requests.
         let mut stream = self.stream;
 
-        let mut payload = serde_json::to_vec(&request).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
+        let mut payload = serde_json::to_vec(&request).map_err(std::io::Error::other)?;
         payload.push(b'\n');
         stream.write_all(&payload).await?;
 
@@ -182,9 +178,8 @@ impl IpcClient {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
 
-        let resp: IpcResponse = serde_json::from_str(line.trim_end()).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let resp: IpcResponse = serde_json::from_str(line.trim_end())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Ok(resp)
     }
 }

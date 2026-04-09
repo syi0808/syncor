@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use git2::{
-    BranchType, IndexAddOption, PushOptions, RemoteCallbacks, Repository, Signature,
-};
+use git2::{BranchType, IndexAddOption, PushOptions, RemoteCallbacks, Repository, Signature};
 
 use crate::config::SyncorPaths;
 use crate::error::{Result, SyncorError};
@@ -42,10 +40,7 @@ impl GitTransport {
             return "master".to_string();
         }
         // Check remote branches
-        if repo
-            .find_branch("origin/main", BranchType::Remote)
-            .is_ok()
-        {
+        if repo.find_branch("origin/main", BranchType::Remote).is_ok() {
             return "main".to_string();
         }
         if repo
@@ -82,10 +77,7 @@ impl SyncTransport for GitTransport {
         // Create .gitignore excluding binary / WAL files.
         let gitignore_path = repo_dir.join(".gitignore");
         if !gitignore_path.exists() {
-            std::fs::write(
-                &gitignore_path,
-                "index.bin\n*.sqlite-wal\n*.sqlite-shm\n",
-            )?;
+            std::fs::write(&gitignore_path, "index.bin\n*.sqlite-wal\n*.sqlite-shm\n")?;
         }
 
         // Make an initial commit if the repo has no commits yet.
@@ -130,8 +122,7 @@ impl SyncTransport for GitTransport {
         let parent_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
 
-        let commit_oid =
-            repo.commit(Some("HEAD"), &sig, &sig, "syncor push", &tree, &parents)?;
+        let commit_oid = repo.commit(Some("HEAD"), &sig, &sig, "syncor push", &tree, &parents)?;
 
         // Push to origin.
         let mut remote = repo.find_remote("origin")?;
@@ -198,9 +189,7 @@ impl SyncTransport for GitTransport {
                 repo.set_head(&format!("refs/heads/{branch_name}"))?;
                 // Create the branch pointing at fetch_commit.
                 repo.branch(&branch_name, &fetch_commit, true)?;
-                repo.checkout_head(Some(
-                    git2::build::CheckoutBuilder::new().force(),
-                ))?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
                 return Ok(PullResult::Success {
                     revision: fetch_commit.id().to_string(),
                 });
@@ -266,8 +255,8 @@ impl SyncTransport for GitTransport {
             created_at: Option<String>,
         }
 
-        let manifest: Manifest = toml::from_str(&contents)
-            .map_err(|e| SyncorError::Config(e.to_string()))?;
+        let manifest: Manifest =
+            toml::from_str(&contents).map_err(|e| SyncorError::Config(e.to_string()))?;
 
         Ok(manifest
             .links

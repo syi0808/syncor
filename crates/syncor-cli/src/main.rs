@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
 use syncor_core::config::{LinksRegistry, SyncorConfig, SyncorPaths};
@@ -8,8 +8,8 @@ use syncor_core::daemon::manager::DaemonManager;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
-use syncor_core::transport::SyncTransport;
 use syncor_core::transport::git::GitTransport;
+use syncor_core::transport::SyncTransport;
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -120,7 +120,9 @@ enum DaemonAction {
 
 fn load_paths() -> Result<SyncorPaths> {
     let paths = SyncorPaths::new();
-    paths.ensure_dirs().context("failed to create syncor directories")?;
+    paths
+        .ensure_dirs()
+        .context("failed to create syncor directories")?;
     Ok(paths)
 }
 
@@ -129,7 +131,9 @@ fn load_registry(paths: &SyncorPaths) -> Result<LinksRegistry> {
 }
 
 fn save_registry(paths: &SyncorPaths, registry: &LinksRegistry) -> Result<()> {
-    registry.save(&paths.links_file()).context("failed to save links registry")
+    registry
+        .save(&paths.links_file())
+        .context("failed to save links registry")
 }
 
 fn find_link_by_dir<'a>(registry: &'a LinksRegistry, dir: &PathBuf) -> Result<&'a LinkInfo> {
@@ -199,11 +203,15 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
         poll_interval_secs: None,
     };
 
-    registry.add(info.clone()).context("failed to register link")?;
+    registry
+        .add(info.clone())
+        .context("failed to register link")?;
     save_registry(&paths, &registry)?;
 
     let engine = make_engine(&paths);
-    engine.init_link(&info).context("failed to initialise remote")?;
+    engine
+        .init_link(&info)
+        .context("failed to initialise remote")?;
 
     println!("Linked {} -> {}", canonical.display(), repo_url);
     println!("Performing initial push...");
@@ -211,8 +219,10 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     match engine.push(&info) {
         Ok(result) => {
             if result.pushed {
-                println!("Initial push complete (snapshot: {})",
-                    result.snapshot_id.as_deref().unwrap_or("n/a"));
+                println!(
+                    "Initial push complete (snapshot: {})",
+                    result.snapshot_id.as_deref().unwrap_or("n/a")
+                );
             } else {
                 println!("Nothing to push.");
             }
@@ -239,9 +249,15 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
     let selected_name = match dir_name {
         Some(n) => {
             if !remote_links.iter().any(|l| l.name == n) {
-                bail!("Remote link '{}' not found. Available: {}",
+                bail!(
+                    "Remote link '{}' not found. Available: {}",
                     n,
-                    remote_links.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "));
+                    remote_links
+                        .iter()
+                        .map(|l| l.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
             n
         }
@@ -283,11 +299,15 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
         poll_interval_secs: None,
     };
 
-    registry.add(info.clone()).context("failed to register link")?;
+    registry
+        .add(info.clone())
+        .context("failed to register link")?;
     save_registry(&paths, &registry)?;
 
     let engine = make_engine(&paths);
-    engine.init_link(&info).context("failed to initialise remote")?;
+    engine
+        .init_link(&info)
+        .context("failed to initialise remote")?;
 
     println!("Connected {} <- {}", local_dir.display(), repo);
     println!("Performing initial pull...");
@@ -340,11 +360,19 @@ fn cmd_status(dir: Option<PathBuf>) -> Result<()> {
             .and_then(|s| s.last_sync_at.as_deref())
             .unwrap_or("never");
 
-        println!("  {} [{}] ({})", link.name, mode_str, link.local_dir.display());
+        println!(
+            "  {} [{}] ({})",
+            link.name,
+            mode_str,
+            link.local_dir.display()
+        );
         println!("    repo: {}", link.repo);
         println!("    last sync: {}", last_sync);
         if has_conflicts {
-            println!("    !! CONFLICTS — run 'syncor resolve {}'", link.local_dir.display());
+            println!(
+                "    !! CONFLICTS — run 'syncor resolve {}'",
+                link.local_dir.display()
+            );
         }
         println!();
     }
@@ -474,7 +502,10 @@ fn cmd_log(dir: PathBuf) -> Result<()> {
     println!("Sync log for {} (most recent first):\n", link.name);
     for entry in &entries {
         let msg = entry.message.as_deref().unwrap_or("");
-        println!("  [{}] {} — {} {}", entry.created_at, entry.action, entry.status, msg);
+        println!(
+            "  [{}] {} — {} {}",
+            entry.created_at, entry.action, entry.status, msg
+        );
     }
 
     Ok(())
@@ -482,21 +513,25 @@ fn cmd_log(dir: PathBuf) -> Result<()> {
 
 fn cmd_config_set(key: String, value: String) -> Result<()> {
     let paths = load_paths()?;
-    let mut config = SyncorConfig::load(&paths.config_file())
-        .context("failed to load config")?;
+    let mut config = SyncorConfig::load(&paths.config_file()).context("failed to load config")?;
 
     match key.as_str() {
         "debounce_secs" => {
             config.debounce_secs = value.parse().context("invalid value for debounce_secs")?;
         }
         "default_poll_interval_secs" => {
-            config.default_poll_interval_secs =
-                value.parse().context("invalid value for default_poll_interval_secs")?;
+            config.default_poll_interval_secs = value
+                .parse()
+                .context("invalid value for default_poll_interval_secs")?;
         }
-        _ => bail!("unknown config key: {key}. Valid keys: debounce_secs, default_poll_interval_secs"),
+        _ => bail!(
+            "unknown config key: {key}. Valid keys: debounce_secs, default_poll_interval_secs"
+        ),
     }
 
-    config.save(&paths.config_file()).context("failed to save config")?;
+    config
+        .save(&paths.config_file())
+        .context("failed to save config")?;
     println!("Set {} = {}", key, value);
 
     Ok(())
@@ -512,8 +547,7 @@ async fn cmd_daemon_start() -> Result<()> {
 
     DaemonManager::cleanup_stale(&paths);
 
-    let config = SyncorConfig::load(&paths.config_file())
-        .context("failed to load config")?;
+    let config = SyncorConfig::load(&paths.config_file()).context("failed to load config")?;
 
     println!("Starting daemon...");
     let manager = DaemonManager::new(paths.clone(), config);
@@ -579,8 +613,10 @@ fn cmd_push(dir: Option<PathBuf>) -> Result<()> {
         match engine.push(link) {
             Ok(result) => {
                 if result.pushed {
-                    println!("done (snapshot: {})",
-                        result.snapshot_id.as_deref().unwrap_or("n/a"));
+                    println!(
+                        "done (snapshot: {})",
+                        result.snapshot_id.as_deref().unwrap_or("n/a")
+                    );
                 } else {
                     println!("nothing to push.");
                 }

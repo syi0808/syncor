@@ -1,7 +1,7 @@
 // crates/syncor-core/tests/conflict_test.rs
 use syncor_core::sync::conflict::{
-    detect_conflicts, ConflictResolver, KeepLocalResolver,
-    FileAction, Conflict, Resolution, ManifestMap,
+    detect_conflicts, Conflict, ConflictResolver, FileAction, KeepLocalResolver, ManifestMap,
+    Resolution,
 };
 
 fn map(entries: &[(&str, [u8; 16])]) -> ManifestMap {

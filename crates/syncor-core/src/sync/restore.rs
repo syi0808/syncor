@@ -13,11 +13,7 @@ pub struct RestoreResult {
 pub struct RestorePipeline;
 
 impl RestorePipeline {
-    pub fn run(
-        snapshot_id: &str,
-        store_dir: &Path,
-        target_dir: &Path,
-    ) -> Result<RestoreResult> {
+    pub fn run(snapshot_id: &str, store_dir: &Path, target_dir: &Path) -> Result<RestoreResult> {
         // 1. Open MetadataCatalog
         let catalog_path = store_dir.join("catalog.sqlite");
         let catalog = MetadataCatalog::open(&catalog_path)?;

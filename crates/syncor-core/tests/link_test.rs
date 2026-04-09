@@ -1,4 +1,4 @@
-use syncor_core::link::{LinkId, LinkInfo, LinkState, LinkMode};
+use syncor_core::link::{LinkId, LinkInfo, LinkMode, LinkState};
 
 #[test]
 fn link_id_is_deterministic() {

@@ -1,7 +1,7 @@
-use syncor_core::watch::watcher::DebouncedWatcher;
-use tempfile::TempDir;
 use std::fs;
 use std::time::Duration;
+use syncor_core::watch::watcher::DebouncedWatcher;
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -9,11 +9,8 @@ async fn watcher_detects_file_creation() {
     let dir = TempDir::new().unwrap();
     let (tx, mut rx) = mpsc::channel(10);
 
-    let _watcher = DebouncedWatcher::start(
-        dir.path().to_path_buf(),
-        Duration::from_millis(100),
-        tx,
-    ).unwrap();
+    let _watcher =
+        DebouncedWatcher::start(dir.path().to_path_buf(), Duration::from_millis(100), tx).unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     fs::write(dir.path().join("test.txt"), "hello").unwrap();
@@ -30,11 +27,8 @@ async fn watcher_debounces_rapid_changes() {
     let dir = TempDir::new().unwrap();
     let (tx, mut rx) = mpsc::channel(10);
 
-    let _watcher = DebouncedWatcher::start(
-        dir.path().to_path_buf(),
-        Duration::from_millis(500),
-        tx,
-    ).unwrap();
+    let _watcher =
+        DebouncedWatcher::start(dir.path().to_path_buf(), Duration::from_millis(500), tx).unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -44,7 +38,9 @@ async fn watcher_debounces_rapid_changes() {
     }
 
     let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-        .await.expect("timeout").expect("closed");
+        .await
+        .expect("timeout")
+        .expect("closed");
     assert!(event.changed);
 
     let no_event = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;

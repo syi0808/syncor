@@ -65,7 +65,7 @@ impl SavePipeline {
             let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
             encoder
                 .write_all(content.as_ref())
-                .map_err(|e| crate::error::SyncorError::Io(e))?;
+                .map_err(crate::error::SyncorError::Io)?;
             let compressed = encoder
                 .finish()
                 .map_err(|e| crate::error::SyncorError::Other(e.to_string()))?;
@@ -121,8 +121,10 @@ impl SavePipeline {
         let mut total_bytes: u64 = 0;
 
         // Build a set of changed paths for quick lookup
-        let changed_paths: std::collections::HashSet<&str> =
-            changed_files.iter().map(|sf| sf.relative_path.as_str()).collect();
+        let changed_paths: std::collections::HashSet<&str> = changed_files
+            .iter()
+            .map(|sf| sf.relative_path.as_str())
+            .collect();
 
         // Add unchanged files from index
         for sf in &scanned {
@@ -181,7 +183,7 @@ impl SavePipeline {
             .collect();
 
         // Build all entries to upsert (unchanged keep their existing entry, changed get new)
-        let mut entries_to_upsert: Vec<FileEntry> = new_entries;
+        let entries_to_upsert: Vec<FileEntry> = new_entries;
 
         file_index.apply_changes(&removed_paths, &entries_to_upsert)?;
 

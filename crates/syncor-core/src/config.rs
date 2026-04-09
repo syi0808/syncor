@@ -32,7 +32,10 @@ impl SyncorPaths {
     pub fn with_home(home: &Path) -> Self {
         let config_dir = home.join(".config").join("syncor");
         let data_dir = home.join(".local").join("share").join("syncor");
-        Self { config_dir, data_dir }
+        Self {
+            config_dir,
+            data_dir,
+        }
     }
 
     // --- Config-dir paths ---
@@ -135,8 +138,7 @@ impl SyncorConfig {
             return Ok(Self::default());
         }
         let raw = std::fs::read_to_string(path)?;
-        let cfg: Self = toml::from_str(&raw)
-            .map_err(|e| SyncorError::Config(e.to_string()))?;
+        let cfg: Self = toml::from_str(&raw).map_err(|e| SyncorError::Config(e.to_string()))?;
         Ok(cfg)
     }
 
@@ -145,8 +147,7 @@ impl SyncorConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let raw = toml::to_string_pretty(self)
-            .map_err(|e| SyncorError::Config(e.to_string()))?;
+        let raw = toml::to_string_pretty(self).map_err(|e| SyncorError::Config(e.to_string()))?;
         std::fs::write(path, raw)?;
         Ok(())
     }
@@ -182,8 +183,8 @@ impl LinksRegistry {
             return Ok(Self::new());
         }
         let raw = std::fs::read_to_string(path)?;
-        let file: LinksFile = toml::from_str(&raw)
-            .map_err(|e| SyncorError::Config(e.to_string()))?;
+        let file: LinksFile =
+            toml::from_str(&raw).map_err(|e| SyncorError::Config(e.to_string()))?;
         let mut registry = Self::new();
         for info in file.links {
             registry.by_id.insert(info.id.as_str().to_owned(), info);
@@ -202,8 +203,7 @@ impl LinksRegistry {
         let file = LinksFile {
             links: links.into_iter().cloned().collect(),
         };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| SyncorError::Config(e.to_string()))?;
+        let raw = toml::to_string_pretty(&file).map_err(|e| SyncorError::Config(e.to_string()))?;
         std::fs::write(path, raw)?;
         Ok(())
     }
@@ -214,9 +214,10 @@ impl LinksRegistry {
     pub fn add(&mut self, info: LinkInfo) -> Result<()> {
         // Check id uniqueness.
         if self.by_id.contains_key(info.id.as_str()) {
-            return Err(SyncorError::LinkAlreadyExists(
-                format!("id {} already registered", info.id),
-            ));
+            return Err(SyncorError::LinkAlreadyExists(format!(
+                "id {} already registered",
+                info.id
+            )));
         }
         // Enforce the one-dir / one-link constraint.
         if self.get_by_dir(&info.local_dir).is_some() {

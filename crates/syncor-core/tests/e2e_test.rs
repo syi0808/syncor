@@ -19,10 +19,18 @@ fn e2e_push_pull_roundtrip() {
     let remote_url = remote_dir.path().to_str().unwrap().to_string();
 
     // --- Machine A: create files ---
-    fs::write(workspace_a.path().join("config.yaml"), "version: 1\nenv: prod\n").unwrap();
+    fs::write(
+        workspace_a.path().join("config.yaml"),
+        "version: 1\nenv: prod\n",
+    )
+    .unwrap();
     let scripts_dir = workspace_a.path().join("scripts");
     fs::create_dir_all(&scripts_dir).unwrap();
-    fs::write(scripts_dir.join("deploy.sh"), "#!/bin/sh\necho 'deploying'\n").unwrap();
+    fs::write(
+        scripts_dir.join("deploy.sh"),
+        "#!/bin/sh\necho 'deploying'\n",
+    )
+    .unwrap();
 
     // --- Machine A: create LinkInfo with Push mode ---
     let link_a = LinkInfo {
@@ -41,7 +49,10 @@ fn e2e_push_pull_roundtrip() {
     engine_a.init_link(&link_a).unwrap();
     let push_result = engine_a.push(&link_a).unwrap();
     assert!(push_result.pushed, "Machine A initial push should succeed");
-    assert!(push_result.snapshot_id.is_some(), "push should produce a snapshot id");
+    assert!(
+        push_result.snapshot_id.is_some(),
+        "push should produce a snapshot id"
+    );
 
     // --- Machine B: same link id/repo/name, different local_dir, Pull mode ---
     let link_b = LinkInfo {
@@ -59,8 +70,14 @@ fn e2e_push_pull_roundtrip() {
     let engine_b = SyncEngine::new(paths_b, Box::new(transport_b));
     engine_b.init_link(&link_b).unwrap();
     let pull_result = engine_b.pull(&link_b).unwrap();
-    assert!(pull_result.restored, "Machine B initial pull should restore files");
-    assert!(pull_result.files_restored >= 2, "at least 2 files should be restored");
+    assert!(
+        pull_result.restored,
+        "Machine B initial pull should restore files"
+    );
+    assert!(
+        pull_result.files_restored >= 2,
+        "at least 2 files should be restored"
+    );
 
     // --- Assert files match ---
     let config_b = workspace_b.path().join("config.yaml");
@@ -72,7 +89,10 @@ fn e2e_push_pull_roundtrip() {
     );
 
     let deploy_b = workspace_b.path().join("scripts").join("deploy.sh");
-    assert!(deploy_b.exists(), "scripts/deploy.sh should exist on Machine B");
+    assert!(
+        deploy_b.exists(),
+        "scripts/deploy.sh should exist on Machine B"
+    );
     assert_eq!(
         fs::read_to_string(&deploy_b).unwrap(),
         "#!/bin/sh\necho 'deploying'\n",
@@ -91,7 +111,10 @@ fn e2e_push_pull_roundtrip() {
 
     // --- Machine B: pull again, assert updated content ---
     let pull_result2 = engine_b.pull(&link_b).unwrap();
-    assert!(pull_result2.restored, "Machine B second pull should restore updated file");
+    assert!(
+        pull_result2.restored,
+        "Machine B second pull should restore updated file"
+    );
 
     assert_eq!(
         fs::read_to_string(workspace_b.path().join("config.yaml")).unwrap(),

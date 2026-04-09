@@ -1,6 +1,6 @@
-use std::path::Path;
-use rusqlite::{Connection, params};
 use crate::error::Result;
+use rusqlite::{params, Connection};
+use std::path::Path;
 
 pub struct StateDb {
     conn: Connection,
@@ -160,10 +160,8 @@ impl StateDb {
     }
 
     pub fn clear_conflicts(&self, link_id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM conflicts WHERE link_id = ?1",
-            params![link_id],
-        )?;
+        self.conn
+            .execute("DELETE FROM conflicts WHERE link_id = ?1", params![link_id])?;
         Ok(())
     }
 

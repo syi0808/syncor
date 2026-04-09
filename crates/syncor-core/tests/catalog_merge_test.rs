@@ -74,7 +74,10 @@ fn merge_adds_remote_snapshots_to_local() {
     let snapshots = merged.list_snapshots(None).unwrap();
     let ids: Vec<&str> = snapshots.iter().map(|s| s.id.as_str()).collect();
 
-    assert!(ids.contains(&"snap-local"), "local snapshot should be present");
+    assert!(
+        ids.contains(&"snap-local"),
+        "local snapshot should be present"
+    );
     assert!(
         ids.contains(&"snap-remote"),
         "remote snapshot should be merged in"

@@ -1,7 +1,7 @@
-use syncor_core::sync::save::SavePipeline;
-use syncor_core::sync::restore::RestorePipeline;
-use tempfile::TempDir;
 use std::fs;
+use syncor_core::sync::restore::RestorePipeline;
+use syncor_core::sync::save::SavePipeline;
+use tempfile::TempDir;
 
 #[test]
 fn restore_recreates_files_from_snapshot() {
@@ -15,15 +15,18 @@ fn restore_recreates_files_from_snapshot() {
     fs::remove_file(workspace.path().join("a.txt")).unwrap();
     fs::remove_file(workspace.path().join("b.txt")).unwrap();
 
-    let result = RestorePipeline::run(
-        &save_result.snapshot_id,
-        store.path(),
-        workspace.path(),
-    ).unwrap();
+    let result =
+        RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
 
     assert_eq!(result.files_restored, 2);
-    assert_eq!(fs::read_to_string(workspace.path().join("a.txt")).unwrap(), "hello");
-    assert_eq!(fs::read_to_string(workspace.path().join("b.txt")).unwrap(), "world");
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("a.txt")).unwrap(),
+        "hello"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("b.txt")).unwrap(),
+        "world"
+    );
 }
 
 #[test]

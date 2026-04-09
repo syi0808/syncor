@@ -1,9 +1,9 @@
-use syncor_core::transport::git::GitTransport;
-use syncor_core::transport::{SyncTransport, PushResult};
-use syncor_core::link::{LinkId, LinkInfo, LinkMode};
-use syncor_core::config::SyncorPaths;
-use tempfile::TempDir;
 use std::fs;
+use syncor_core::config::SyncorPaths;
+use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::transport::git::GitTransport;
+use syncor_core::transport::{PushResult, SyncTransport};
+use tempfile::TempDir;
 
 fn create_bare_remote(dir: &std::path::Path) -> String {
     git2::Repository::init_bare(dir).unwrap();
@@ -54,7 +54,8 @@ fn push_commits_store_files() {
 
     transport.init_remote(&link).unwrap();
 
-    let store_dir = paths.link_repo_dir(&link.id)
+    let store_dir = paths
+        .link_repo_dir(&link.id)
         .join("stores")
         .join(&link.name);
     fs::create_dir_all(&store_dir).unwrap();

@@ -31,12 +31,13 @@ impl DebouncedWatcher {
         let (raw_tx, mut raw_rx) = mpsc::channel::<()>(64);
 
         let watcher_tx = raw_tx.clone();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if res.is_ok() {
-                // Best-effort: ignore send errors (task may have exited).
-                let _ = watcher_tx.try_send(());
-            }
-        })?;
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if res.is_ok() {
+                    // Best-effort: ignore send errors (task may have exited).
+                    let _ = watcher_tx.try_send(());
+                }
+            })?;
 
         watcher.watch(&path, RecursiveMode::Recursive)?;
 
