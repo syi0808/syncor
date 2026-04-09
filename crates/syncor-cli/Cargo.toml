@@ -1,0 +1,18 @@
+[package]
+name = "syncor-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "syncor"
+path = "src/main.rs"
+
+[dependencies]
+syncor-core = { workspace = true }
+clap = { workspace = true }
+dialoguer = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
