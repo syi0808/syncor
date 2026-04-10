@@ -1,5 +1,6 @@
 use std::fs;
-use syncor_core::sync::restore::RestorePipeline;
+use std::path::Path;
+use syncor_core::sync::restore::{validate_path, RestorePipeline};
 use syncor_core::sync::save::SavePipeline;
 use tempfile::TempDir;
 
@@ -70,4 +71,48 @@ fn restore_preserves_file_permissions() {
         "execute bit should be preserved, got {:o}",
         mode
     );
+}
+
+#[test]
+fn restore_rejects_path_traversal() {
+    let base = Path::new("/tmp/safe_dir");
+
+    // Path traversal with ..
+    assert!(validate_path(base, "../../etc/passwd").is_err());
+    assert!(validate_path(base, "foo/../../../etc/passwd").is_err());
+
+    // Absolute paths
+    assert!(validate_path(base, "/etc/passwd").is_err());
+    assert!(validate_path(base, "\\etc\\passwd").is_err());
+
+    // Normal paths should succeed
+    assert!(validate_path(base, "foo/bar.txt").is_ok());
+    assert!(validate_path(base, "file.txt").is_ok());
+}
+
+#[test]
+fn restore_preserves_ignored_files() {
+    let workspace = TempDir::new().unwrap();
+    let store = TempDir::new().unwrap();
+
+    // Create files including an "ignored" one
+    fs::write(workspace.path().join("tracked.txt"), "tracked").unwrap();
+    fs::write(workspace.path().join(".env"), "SECRET=123").unwrap();
+    fs::write(workspace.path().join(".chkptignore"), ".env\n").unwrap();
+
+    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+
+    // Add another tracked file, then restore
+    fs::write(workspace.path().join("extra.txt"), "extra").unwrap();
+    RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+
+    // .env should still exist (it was ignored by scanner)
+    assert!(
+        workspace.path().join(".env").exists(),
+        ".env should be preserved"
+    );
+    // extra.txt should be removed (it was tracked but not in snapshot)
+    assert!(!workspace.path().join("extra.txt").exists());
+    // tracked.txt should exist
+    assert!(workspace.path().join("tracked.txt").exists());
 }

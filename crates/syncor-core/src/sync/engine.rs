@@ -8,7 +8,19 @@ use crate::sync::state::{ConflictRecord, StateDb, SyncState};
 use crate::transport::{PullResult, PushResult, SyncTransport};
 use chkpt_core::store::blob::bytes_to_hex;
 use chkpt_core::store::catalog::MetadataCatalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Validate that a path from a manifest doesn't escape the target directory.
+fn validate_path(base: &Path, relative: &str) -> Result<PathBuf> {
+    if relative.starts_with('/') || relative.starts_with('\\') || relative.contains("..") {
+        return Err(SyncorError::Other(format!(
+            "unsafe path in manifest: {}",
+            relative,
+        )));
+    }
+    let dest = base.join(relative);
+    Ok(dest)
+}
 
 // ---------------------------------------------------------------------------
 // LinkLock — per-link advisory filesystem lock using fs4
@@ -377,7 +389,7 @@ impl SyncEngine {
                         FileAction::ApplyRemote { path, remote_hash } => {
                             let hash_hex = bytes_to_hex(remote_hash);
                             let content = pack_set.read(&hash_hex)?;
-                            let file_path = link.local_dir.join(path);
+                            let file_path = validate_path(&link.local_dir, path)?;
                             if let Some(parent) = file_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
@@ -391,7 +403,7 @@ impl SyncEngine {
                             files_restored += 1;
                         }
                         FileAction::DeleteLocal { path } => {
-                            let file_path = link.local_dir.join(path);
+                            let file_path = validate_path(&link.local_dir, path)?;
                             let _ = std::fs::remove_file(&file_path);
                         }
                         FileAction::Conflict(_) => {} // already handled above

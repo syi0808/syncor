@@ -12,7 +12,7 @@ pub enum SyncorError {
     Chkpt(#[from] chkpt_core::error::ChkpttError),
 
     #[error("git error: {0}")]
-    Git(#[from] git2::Error),
+    Git(String),
 
     #[error("config error: {0}")]
     Config(String),

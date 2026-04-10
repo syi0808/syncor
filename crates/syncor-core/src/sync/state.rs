@@ -211,6 +211,14 @@ impl StateDb {
             "DELETE FROM sync_state WHERE link_id = ?1",
             params![link_id],
         )?;
+        self.conn.execute(
+            "DELETE FROM conflicts WHERE link_id = ?1",
+            params![link_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM sync_log WHERE link_id = ?1",
+            params![link_id],
+        )?;
         Ok(())
     }
 }

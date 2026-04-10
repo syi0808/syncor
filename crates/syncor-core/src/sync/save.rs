@@ -34,6 +34,8 @@ impl SavePipeline {
         let index_path = store_dir.join("index.bin");
         let mut file_index = FileIndex::open(&index_path)?;
 
+        let catalog_path = store_dir.join("catalog.sqlite");
+
         // 4. Compare scanned files against index to find changed files
         let mut changed_files = Vec::new();
         for sf in &scanned {
@@ -49,12 +51,36 @@ impl SavePipeline {
             changed_files.push(sf);
         }
 
-        // 5. Hash and compress changed files, add to pack
+        // 5. Check if anything changed before doing expensive work
+        let files_hashed = changed_files.len();
+
+        // Check if any files were removed since last index
+        let scanned_paths_set: std::collections::HashSet<&str> =
+            scanned.iter().map(|f| f.relative_path.as_str()).collect();
+        let all_indexed = file_index.all_paths()?;
+        let removed_paths: Vec<String> = all_indexed
+            .iter()
+            .filter(|p| !scanned_paths_set.contains(p.as_str()))
+            .cloned()
+            .collect();
+
+        if files_hashed == 0 && removed_paths.is_empty() {
+            // Nothing changed — return the latest snapshot ID without creating a new one
+            let catalog = MetadataCatalog::open(&catalog_path)?;
+            let latest = catalog.latest_snapshot()?;
+            return Ok(SaveResult {
+                snapshot_id: latest.map(|s| s.id).unwrap_or_default(),
+                files_scanned,
+                files_hashed: 0,
+                bytes_compressed: 0,
+            });
+        }
+
+        // Hash and compress changed files, add to pack
         let mut pack_writer = PackWriter::new(&packs_dir)?;
         let mut blob_locations: Vec<([u8; 16], BlobLocation)> = Vec::new();
         let mut new_entries: Vec<FileEntry> = Vec::new();
         let mut bytes_compressed: u64 = 0;
-        let files_hashed = changed_files.len();
 
         for sf in &changed_files {
             let content = read_or_mmap(&sf.absolute_path)?;
@@ -109,7 +135,6 @@ impl SavePipeline {
             }
         }
 
-        let catalog_path = store_dir.join("catalog.sqlite");
         let catalog = MetadataCatalog::open(&catalog_path)?;
 
         if !blob_locations.is_empty() {
@@ -173,15 +198,6 @@ impl SavePipeline {
         catalog.insert_snapshot(&snapshot, &manifest)?;
 
         // 10. Update FileIndex with apply_changes
-        // Remove paths that are no longer in workspace
-        let scanned_paths: std::collections::HashSet<String> =
-            scanned.iter().map(|sf| sf.relative_path.clone()).collect();
-        let index_paths = file_index.all_paths()?;
-        let removed_paths: Vec<String> = index_paths
-            .into_iter()
-            .filter(|p| !scanned_paths.contains(p))
-            .collect();
-
         // Build all entries to upsert (unchanged keep their existing entry, changed get new)
         let entries_to_upsert: Vec<FileEntry> = new_entries;
 
