@@ -1,7 +1,7 @@
 use crate::error::Result;
 use chkpt_core::index::{FileEntry, FileIndex};
 use chkpt_core::scanner::scan_workspace;
-use chkpt_core::store::blob::{bytes_to_hex, hash_content_bytes, read_or_mmap};
+use chkpt_core::store::blob::{bytes_to_hex, hash_content_bytes};
 use chkpt_core::store::catalog::{BlobLocation, CatalogSnapshot, ManifestEntry, MetadataCatalog};
 use chkpt_core::store::pack::PackWriter;
 use chkpt_core::store::snapshot::SnapshotStats;
@@ -83,8 +83,13 @@ impl SavePipeline {
         let mut bytes_compressed: u64 = 0;
 
         for sf in &changed_files {
-            let content = read_or_mmap(&sf.absolute_path)?;
-            let hash_bytes = hash_content_bytes(content.as_ref());
+            // Use read_path_bytes for symlink-aware reading (symlinks to dirs
+            // would cause EISDIR with read_or_mmap).
+            let content = chkpt_core::store::blob::read_path_bytes(
+                &sf.absolute_path,
+                sf.is_symlink,
+            )?;
+            let hash_bytes = hash_content_bytes(&content);
             let hash_hex = bytes_to_hex(&hash_bytes);
 
             // LZ4 compress
