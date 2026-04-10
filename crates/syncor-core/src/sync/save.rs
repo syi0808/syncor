@@ -3,7 +3,7 @@ use chkpt_core::index::{FileEntry, FileIndex};
 use chkpt_core::scanner::scan_workspace;
 use chkpt_core::store::blob::{bytes_to_hex, hash_content_bytes};
 use chkpt_core::store::catalog::{BlobLocation, CatalogSnapshot, ManifestEntry, MetadataCatalog};
-use chkpt_core::store::pack::PackWriter;
+use chkpt_core::store::pack::{PackFinishOptions, PackWriter};
 use chkpt_core::store::snapshot::SnapshotStats;
 use chrono::Utc;
 use std::io::Write;
@@ -20,27 +20,26 @@ pub struct SaveResult {
 pub struct SavePipeline;
 
 impl SavePipeline {
-    pub fn run(workspace: &Path, store_dir: &Path, message: Option<&str>) -> Result<SaveResult> {
-        // 1. Ensure store directories
+    pub fn run(workspace: &Path, store_dir: &Path, _message: Option<&str>) -> Result<SaveResult> {
+        // 1. Ensure store directories exist
         let packs_dir = store_dir.join("packs");
+        let trees_dir = store_dir.join("trees");
+        let catalog_path = store_dir.join("catalog.sqlite");
+        let index_path = store_dir.join("index.bin");
         std::fs::create_dir_all(&packs_dir)?;
-        std::fs::create_dir_all(store_dir.join("trees"))?;
+        std::fs::create_dir_all(&trees_dir)?;
 
         // 2. Scan workspace
         let scanned = scan_workspace(workspace, None)?;
         let files_scanned = scanned.len();
 
-        // 3. Load FileIndex
-        let index_path = store_dir.join("index.bin");
-        let mut file_index = FileIndex::open(&index_path)?;
+        // 3. Load file index for incremental detection
+        let mut index = FileIndex::open(&index_path)?;
 
-        let catalog_path = store_dir.join("catalog.sqlite");
-
-        // 4. Compare scanned files against index to find changed files
+        // 4. Find changed files (compare against index by size + mtime)
         let mut changed_files = Vec::new();
         for sf in &scanned {
-            if let Ok(Some(entry)) = file_index.get(&sf.relative_path) {
-                // Check if size or mtime changed
+            if let Ok(Some(entry)) = index.get(&sf.relative_path) {
                 if entry.size == sf.size
                     && entry.mtime_secs == sf.mtime_secs
                     && entry.mtime_nanos == sf.mtime_nanos
@@ -50,22 +49,19 @@ impl SavePipeline {
             }
             changed_files.push(sf);
         }
-
-        // 5. Check if anything changed before doing expensive work
         let files_hashed = changed_files.len();
 
         // Check if any files were removed since last index
-        let scanned_paths_set: std::collections::HashSet<&str> =
+        let scanned_paths: std::collections::HashSet<&str> =
             scanned.iter().map(|f| f.relative_path.as_str()).collect();
-        let all_indexed = file_index.all_paths()?;
+        let all_indexed = index.all_paths()?;
         let removed_paths: Vec<String> = all_indexed
-            .iter()
-            .filter(|p| !scanned_paths_set.contains(p.as_str()))
-            .cloned()
+            .into_iter()
+            .filter(|p| !scanned_paths.contains(p.as_str()))
             .collect();
 
+        // If nothing changed and nothing removed, skip snapshot creation
         if files_hashed == 0 && removed_paths.is_empty() {
-            // Nothing changed — return the latest snapshot ID without creating a new one
             let catalog = MetadataCatalog::open(&catalog_path)?;
             let latest = catalog.latest_snapshot()?;
             return Ok(SaveResult {
@@ -76,7 +72,7 @@ impl SavePipeline {
             });
         }
 
-        // Hash and compress changed files, add to pack
+        // 5. Hash, compress, and pack changed files
         let mut pack_writer = PackWriter::new(&packs_dir)?;
         let mut blob_locations: Vec<([u8; 16], BlobLocation)> = Vec::new();
         let mut new_entries: Vec<FileEntry> = Vec::new();
@@ -85,10 +81,8 @@ impl SavePipeline {
         for sf in &changed_files {
             // Use read_path_bytes for symlink-aware reading (symlinks to dirs
             // would cause EISDIR with read_or_mmap).
-            let content = chkpt_core::store::blob::read_path_bytes(
-                &sf.absolute_path,
-                sf.is_symlink,
-            )?;
+            let content =
+                chkpt_core::store::blob::read_path_bytes(&sf.absolute_path, sf.is_symlink)?;
             let hash_bytes = hash_content_bytes(&content);
             let hash_hex = bytes_to_hex(&hash_bytes);
 
@@ -124,54 +118,37 @@ impl SavePipeline {
             });
         }
 
-        // 6. Finish pack if not empty
+        // 6. Finish pack — chunk at 50 MB to stay under GitHub's 100 MB file limit
         let pack_hash = if !pack_writer.is_empty() {
-            Some(pack_writer.finish()?)
+            Some(pack_writer.finish_with_options(PackFinishOptions {
+                chunk_bytes: Some(50_000_000),
+            })?)
         } else {
-            // Drop the empty pack writer without finishing
             drop(pack_writer);
             None
         };
 
-        // 7. Update blob locations with pack hash and upsert to catalog
+        // 7. Set pack_hash on blob locations
         if let Some(ref ph) = pack_hash {
-            for (_, loc) in &mut blob_locations {
+            for (_, loc) in blob_locations.iter_mut() {
                 loc.pack_hash = Some(ph.clone());
             }
         }
 
-        let catalog = MetadataCatalog::open(&catalog_path)?;
-
-        if !blob_locations.is_empty() {
-            catalog.bulk_upsert_blob_locations(&blob_locations)?;
-        }
-
-        // 8. Build manifest: unchanged from index + newly hashed
+        // 8. Build manifest from index (unchanged) + new entries
         let mut manifest: Vec<ManifestEntry> = Vec::new();
-        let mut total_bytes: u64 = 0;
-
-        // Build a set of changed paths for quick lookup
-        let changed_paths: std::collections::HashSet<&str> = changed_files
-            .iter()
-            .map(|sf| sf.relative_path.as_str())
-            .collect();
-
-        // Add unchanged files from index
         for sf in &scanned {
-            if !changed_paths.contains(sf.relative_path.as_str()) {
-                if let Ok(Some(entry)) = file_index.get(&sf.relative_path) {
+            if let Ok(Some(entry)) = index.get(&sf.relative_path) {
+                if !new_entries.iter().any(|e| e.path == sf.relative_path) {
                     manifest.push(ManifestEntry {
                         path: entry.path.clone(),
                         blob_hash: entry.blob_hash,
                         size: entry.size,
                         mode: entry.mode,
                     });
-                    total_bytes += entry.size;
                 }
             }
         }
-
-        // Add newly hashed files
         for entry in &new_entries {
             manifest.push(ManifestEntry {
                 path: entry.path.clone(),
@@ -179,34 +156,35 @@ impl SavePipeline {
                 size: entry.size,
                 mode: entry.mode,
             });
-            total_bytes += entry.size;
+        }
+        manifest.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // 9. Open catalog and insert snapshot
+        let catalog = MetadataCatalog::open(&catalog_path)?;
+        let parent = catalog.latest_snapshot()?;
+
+        if !blob_locations.is_empty() {
+            catalog.bulk_upsert_blob_locations(&blob_locations)?;
         }
 
-        // 9. Create CatalogSnapshot with UUIDv7, insert_snapshot
         let snapshot_id = Uuid::now_v7().to_string();
-        let parent_snapshot = catalog.latest_snapshot()?;
-
         let snapshot = CatalogSnapshot {
             id: snapshot_id.clone(),
             created_at: Utc::now(),
-            message: message.map(|s| s.to_string()),
-            parent_snapshot_id: parent_snapshot.map(|s| s.id),
+            message: None,
+            parent_snapshot_id: parent.as_ref().map(|p| p.id.clone()),
             manifest_snapshot_id: None,
             root_tree_hash: None,
             stats: SnapshotStats {
-                total_files: files_scanned as u64,
-                total_bytes,
+                total_files: manifest.len() as u64,
+                total_bytes: manifest.iter().map(|e| e.size).sum(),
                 new_objects: files_hashed as u64,
             },
         };
-
         catalog.insert_snapshot(&snapshot, &manifest)?;
 
-        // 10. Update FileIndex with apply_changes
-        // Build all entries to upsert (unchanged keep their existing entry, changed get new)
-        let entries_to_upsert: Vec<FileEntry> = new_entries;
-
-        file_index.apply_changes(&removed_paths, &entries_to_upsert)?;
+        // 10. Update file index
+        index.apply_changes(&removed_paths, &new_entries)?;
 
         Ok(SaveResult {
             snapshot_id,

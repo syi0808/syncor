@@ -184,9 +184,9 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chkpt-core"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1a702fb260cdf60e9da8fa9269999afc46b837e08697e9ea34a3fee7e5276c1"
+checksum = "e4db7432294b49f940890d8d051383145b817c7e9c560ce4960ea56e7bfa7571"
 dependencies = [
  "anyhow",
  "bitcode",
@@ -197,6 +197,8 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tar",
  "tempfile",
  "thiserror",
@@ -1344,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "syncor-cli"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chkpt-core",
@@ -1360,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "syncor-core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "chkpt-core",
  "chrono",
