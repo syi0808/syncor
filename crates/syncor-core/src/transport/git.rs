@@ -323,21 +323,25 @@ impl SyncTransport for GitTransport {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
-        // Fetch.
-        let fetch_output = Command::new("git")
-            .args(["fetch", "origin", &branch])
-            .current_dir(&repo_dir)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
+        // Fetch with retry.
+        retry_with_backoff(3, || {
+            let fetch_output = Command::new("git")
+                .args(["fetch", "origin", &branch])
+                .current_dir(&repo_dir)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
 
-        if !fetch_output.status.success() {
-            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
-            return Err(SyncorError::Transport(format!(
-                "git fetch failed: {}",
-                stderr.trim()
-            )));
-        }
+            if fetch_output.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&fetch_output.stderr).to_string();
+                Err(SyncorError::Transport(format!(
+                    "fetch failed: {}",
+                    stderr.trim()
+                )))
+            }
+        })?;
 
         let local = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
         let remote = Self::git_ok(&repo_dir, &["rev-parse", &format!("origin/{}", branch)]);
