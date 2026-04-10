@@ -7,7 +7,7 @@ syncor monitors local directories, compresses and deduplicates content via [chkp
 ## Install
 
 ```bash
-cargo install syncor-cli
+cargo install syncor
 ```
 
 Requires `git` CLI on your PATH.

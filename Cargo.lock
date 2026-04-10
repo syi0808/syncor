@@ -1345,8 +1345,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "syncor-cli"
-version = "0.1.2"
+name = "syncor"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chkpt-core",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "syncor-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chkpt-core",
  "chrono",
