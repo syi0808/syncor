@@ -163,3 +163,22 @@ fn merge_empty_remote_is_noop() {
     let snapshots = merged.list_snapshots(None).unwrap();
     assert_eq!(snapshots.len(), 1, "local snapshot should still be present");
 }
+
+#[cfg(unix)]
+#[test]
+fn merge_rejects_non_utf8_path() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    let dir = TempDir::new().unwrap();
+    let local_path = dir.path().join("local.sqlite");
+    let local = MetadataCatalog::open(&local_path).unwrap();
+    drop(local);
+
+    let bad_name = OsStr::from_bytes(&[0xff, 0xfe]);
+    let bad_path: PathBuf = dir.path().join(bad_name);
+
+    let result = merge_catalogs(&local_path, &bad_path);
+    assert!(result.is_err(), "should return error for non-UTF-8 path");
+}

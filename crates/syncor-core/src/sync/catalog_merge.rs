@@ -5,9 +5,12 @@ use std::path::Path;
 pub fn merge_catalogs(local_path: &Path, remote_path: &Path) -> Result<()> {
     let conn = Connection::open(local_path)?;
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    let remote_str = remote_path.to_str().ok_or_else(|| {
+        crate::error::SyncorError::Other("non-UTF-8 path for remote catalog".into())
+    })?;
     conn.execute(
         "ATTACH DATABASE ?1 AS remote",
-        [remote_path.to_str().unwrap()],
+        [remote_str],
     )?;
 
     conn.execute_batch(
