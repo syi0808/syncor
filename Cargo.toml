@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/syncor-core", "crates/syncor-cli"]
 
 [workspace.dependencies]
-syncor-core = { path = "crates/syncor-core", version = "0.1.2" }
+syncor-core = { path = "crates/syncor-core", version = "0.1.3" }
 chkpt-core = "0.3.1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
