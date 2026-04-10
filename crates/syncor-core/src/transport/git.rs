@@ -1,16 +1,15 @@
 use std::path::{Path, PathBuf};
-
-use git2::{BranchType, IndexAddOption, PushOptions, RemoteCallbacks, Repository, Signature};
+use std::process::Command;
 
 use crate::config::SyncorPaths;
 use crate::error::{Result, SyncorError};
 use crate::link::LinkInfo;
 use crate::transport::{ConflictInfo, PullResult, PushResult, RemoteLinkInfo, SyncTransport};
 
-/// Git-backed transport using libgit2.
-///
-/// Because `git2::Repository` is !Send + !Sync we store only [`SyncorPaths`]
-/// and open the repository on every call.
+/// Git-backed transport using the `git` CLI for operations that need
+/// authentication (clone, fetch, push) and libgit2 for local-only work
+/// (commit, staging).  This avoids the credential-helper issues that
+/// plague libgit2 on macOS / Windows.
 pub struct GitTransport {
     paths: SyncorPaths,
 }
@@ -20,33 +19,58 @@ impl GitTransport {
         Self { paths }
     }
 
-    /// Working-tree directory for this link's clone.
     fn repo_dir(&self, link: &LinkInfo) -> PathBuf {
         self.paths.link_repo_dir(&link.id)
     }
 
-    /// Create a signature for commits.
-    fn sig() -> std::result::Result<Signature<'static>, git2::Error> {
-        Signature::now("syncor", "syncor@localhost")
+    /// Run a git CLI command in a given directory.
+    fn git(dir: &Path, args: &[&str]) -> Result<String> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| SyncorError::Transport(format!("failed to run git: {}", e)))?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Err(SyncorError::Transport(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                stderr.trim()
+            )))
+        }
     }
 
-    /// Determine the primary branch name (main or master).
-    fn primary_branch(repo: &Repository) -> String {
-        // Try main first, then master.
-        if repo.find_branch("main", BranchType::Local).is_ok() {
+    /// Run git command, returning Ok(stdout) or Ok("") on failure (non-fatal).
+    fn git_ok(dir: &Path, args: &[&str]) -> String {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    }
+
+    fn primary_branch(repo_dir: &Path) -> String {
+        // Check current branch via symbolic-ref first
+        let out = Self::git_ok(repo_dir, &["symbolic-ref", "--short", "HEAD"]);
+        let branch = out.trim();
+        if !branch.is_empty() {
+            return branch.to_string();
+        }
+        // Fallback: check which branches exist
+        let out = Self::git_ok(repo_dir, &["branch", "--list", "main"]);
+        if out.contains("main") {
             return "main".to_string();
         }
-        if repo.find_branch("master", BranchType::Local).is_ok() {
-            return "master".to_string();
-        }
-        // Check remote branches
-        if repo.find_branch("origin/main", BranchType::Remote).is_ok() {
-            return "main".to_string();
-        }
-        if repo
-            .find_branch("origin/master", BranchType::Remote)
-            .is_ok()
-        {
+        let out = Self::git_ok(repo_dir, &["branch", "--list", "master"]);
+        if out.contains("master") {
             return "master".to_string();
         }
         "main".to_string()
@@ -56,48 +80,48 @@ impl GitTransport {
 impl SyncTransport for GitTransport {
     fn init_remote(&self, link: &LinkInfo) -> Result<()> {
         let repo_dir = self.repo_dir(link);
+
+        if repo_dir.join(".git").exists() {
+            return Ok(());
+        }
+
         std::fs::create_dir_all(&repo_dir)?;
 
-        let repo = match Repository::clone(&link.repo, &repo_dir) {
-            Ok(r) => r,
-            Err(_) => {
-                // Clone may fail on an empty bare repo. Init locally and add
-                // remote instead.
-                let r = Repository::init(&repo_dir)?;
-                r.remote("origin", &link.repo)?;
-                r
-            }
-        };
+        // Try clone first; fall back to init for empty repos.
+        let clone_result = Command::new("git")
+            .args(["clone", &link.repo, "."])
+            .current_dir(&repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output();
 
-        // Create stores/<name>/packs and stores/<name>/trees directories.
+        let cloned = matches!(clone_result, Ok(ref o) if o.status.success());
+        if !cloned {
+            // Init + add remote for empty repos.
+            Self::git(&repo_dir, &["init"])?;
+            Self::git(&repo_dir, &["remote", "add", "origin", &link.repo])?;
+        }
+
+        // Create store dirs.
         let store_base = repo_dir.join("stores").join(&link.name);
         std::fs::create_dir_all(store_base.join("packs"))?;
         std::fs::create_dir_all(store_base.join("trees"))?;
 
-        // Create .gitignore excluding binary / WAL files.
+        // .gitignore
         let gitignore_path = repo_dir.join(".gitignore");
         if !gitignore_path.exists() {
             std::fs::write(&gitignore_path, "index.bin\n*.sqlite-wal\n*.sqlite-shm\n")?;
         }
 
-        // Make an initial commit if the repo has no commits yet.
-        if repo.head().is_err() {
-            let mut index = repo.index()?;
-            index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
-            let oid = index.write_tree()?;
-            index.write()?;
-            let tree = repo.find_tree(oid)?;
-            let sig = Self::sig()?;
-            repo.commit(Some("HEAD"), &sig, &sig, "init syncor repo", &tree, &[])?;
-
-            // Ensure the branch is named "main".
-            let head = repo.head()?;
-            if let Some(name) = head.shorthand() {
-                if name != "main" {
-                    // Rename the branch to "main".
-                    let mut branch = repo.find_branch(name, BranchType::Local)?;
-                    branch.rename("main", true)?;
-                }
+        // Only create initial commit for freshly init'd repos (not cloned ones).
+        if !cloned {
+            let has_commits = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
+            if has_commits.is_empty() {
+                Self::git(&repo_dir, &["add", "-A"])?;
+                Self::git(
+                    &repo_dir,
+                    &["commit", "-m", "init syncor repo", "--allow-empty"],
+                )?;
+                let _ = Self::git(&repo_dir, &["branch", "-M", "main"]);
             }
         }
 
@@ -106,119 +130,99 @@ impl SyncTransport for GitTransport {
 
     fn push(&self, link: &LinkInfo, _store_path: &Path) -> Result<PushResult> {
         let repo_dir = self.repo_dir(link);
-        let repo = Repository::open(&repo_dir)?;
-        let branch_name = Self::primary_branch(&repo);
+        let branch = Self::primary_branch(&repo_dir);
 
-        // Stage all changes.
-        let mut index = repo.index()?;
-        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
-        let oid = index.write_tree()?;
-        index.write()?;
+        // Stage all.
+        Self::git(&repo_dir, &["add", "-A"])?;
 
-        let tree = repo.find_tree(oid)?;
-        let sig = Self::sig()?;
-
-        // Build parent commit list.
-        let parent_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-        let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
-
-        let commit_oid = repo.commit(Some("HEAD"), &sig, &sig, "syncor push", &tree, &parents)?;
-
-        // Push to origin.
-        let mut remote = repo.find_remote("origin")?;
-        let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
-
-        let push_err = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-        {
-            let push_err = push_err.clone();
-            let mut callbacks = RemoteCallbacks::new();
-            callbacks.push_update_reference(move |_ref, status| {
-                if let Some(msg) = status {
-                    *push_err.lock().unwrap() = Some(msg.to_string());
-                }
-                Ok(())
+        // Check if there's anything to commit.
+        let status = Self::git_ok(&repo_dir, &["status", "--porcelain"]);
+        if status.trim().is_empty() {
+            // Nothing changed — still "success" but with current HEAD as revision.
+            let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
+            return Ok(PushResult::Success {
+                revision: rev.trim().to_string(),
             });
-
-            let mut push_opts = PushOptions::new();
-            push_opts.remote_callbacks(callbacks);
-
-            if let Err(e) = remote.push(&[&refspec], Some(&mut push_opts)) {
-                let msg = e.to_string();
-                if msg.contains("non-fast-forward") {
-                    return Ok(PushResult::Conflict {
-                        details: ConflictInfo { message: msg },
-                    });
-                }
-                return Err(SyncorError::Git(e));
-            }
         }
 
-        let push_err = push_err.lock().unwrap().take();
-        if let Some(err_msg) = push_err {
-            if err_msg.contains("non-fast-forward") {
-                return Ok(PushResult::Conflict {
-                    details: ConflictInfo { message: err_msg },
-                });
-            }
-            return Err(SyncorError::Transport(err_msg));
-        }
+        Self::git(&repo_dir, &["commit", "-m", "syncor push"])?;
 
-        Ok(PushResult::Success {
-            revision: commit_oid.to_string(),
-        })
+        // Push via CLI (uses system credential helpers).
+        let push_output = Command::new("git")
+            .args(["push", "-u", "origin", &branch])
+            .current_dir(&repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| SyncorError::Transport(format!("push exec: {}", e)))?;
+
+        if push_output.status.success() {
+            let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
+            Ok(PushResult::Success {
+                revision: rev.trim().to_string(),
+            })
+        } else {
+            let stderr = String::from_utf8_lossy(&push_output.stderr).to_string();
+            if stderr.contains("non-fast-forward") || stderr.contains("rejected") {
+                Ok(PushResult::Conflict {
+                    details: ConflictInfo {
+                        message: stderr.trim().to_string(),
+                    },
+                })
+            } else {
+                Err(SyncorError::Transport(format!(
+                    "git push failed: {}",
+                    stderr.trim()
+                )))
+            }
+        }
     }
 
     fn pull(&self, link: &LinkInfo, _store_path: &Path) -> Result<PullResult> {
         let repo_dir = self.repo_dir(link);
-        let repo = Repository::open(&repo_dir)?;
-        let branch_name = Self::primary_branch(&repo);
+        let branch = Self::primary_branch(&repo_dir);
 
-        // Fetch from origin.
-        let mut remote = repo.find_remote("origin")?;
-        remote.fetch(&[&branch_name], None, None)?;
+        // Record current HEAD before fetch.
+        let head_before = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
 
-        // Find the fetch head.
-        let fetch_head = repo.find_reference(&format!("refs/remotes/origin/{branch_name}"))?;
-        let fetch_commit = fetch_head.peel_to_commit()?;
+        // Fetch via CLI.
+        let fetch_output = Command::new("git")
+            .args(["fetch", "origin", &branch])
+            .current_dir(&repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
 
-        // Compare with local HEAD.
-        let local_head = match repo.head() {
-            Ok(h) => h.peel_to_commit()?,
-            Err(_) => {
-                // No local commits yet — just set HEAD.
-                repo.set_head(&format!("refs/heads/{branch_name}"))?;
-                // Create the branch pointing at fetch_commit.
-                repo.branch(&branch_name, &fetch_commit, true)?;
-                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
-                return Ok(PullResult::Success {
-                    revision: fetch_commit.id().to_string(),
-                });
-            }
-        };
+        if !fetch_output.status.success() {
+            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+            return Err(SyncorError::Transport(format!(
+                "git fetch failed: {}",
+                stderr.trim()
+            )));
+        }
 
-        if local_head.id() == fetch_commit.id() {
+        // Compare local vs remote.
+        let remote_ref = format!("origin/{}", branch);
+        let remote_head = Self::git_ok(&repo_dir, &["rev-parse", &remote_ref]);
+
+        if head_before.trim() == remote_head.trim() && !head_before.is_empty() {
             return Ok(PullResult::UpToDate);
         }
 
-        // Check if we can fast-forward.
-        let analysis = repo.merge_analysis(&[&repo.find_annotated_commit(fetch_commit.id())?])?;
+        // Try fast-forward merge.
+        let merge_output = Command::new("git")
+            .args(["merge", "--ff-only", &remote_ref])
+            .current_dir(&repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| SyncorError::Transport(format!("merge exec: {}", e)))?;
 
-        if analysis.0.is_fast_forward() {
-            // Fast-forward: move the branch ref and checkout.
-            let refname = format!("refs/heads/{branch_name}");
-            repo.reference(
-                &refname,
-                fetch_commit.id(),
-                true,
-                "syncor pull fast-forward",
-            )?;
-            repo.set_head(&refname)?;
-            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
-
+        if merge_output.status.success() {
+            let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
             Ok(PullResult::Success {
-                revision: fetch_commit.id().to_string(),
+                revision: rev.trim().to_string(),
             })
         } else {
+            // If merge --ff-only fails, it's a conflict (diverged histories).
             Ok(PullResult::Conflict {
                 details: ConflictInfo {
                     message: "cannot fast-forward; manual resolution needed".to_string(),
@@ -228,12 +232,18 @@ impl SyncTransport for GitTransport {
     }
 
     fn list_remote_links(&self, repo_url: &str) -> Result<Vec<RemoteLinkInfo>> {
-        // Clone to a temp dir and read syncor.toml.
         let tmp = tempfile::tempdir()?;
-        let _repo = match Repository::clone(repo_url, tmp.path()) {
-            Ok(r) => r,
-            Err(_) => return Ok(vec![]),
-        };
+
+        let clone_output = Command::new("git")
+            .args(["clone", "--depth=1", repo_url, "."])
+            .current_dir(tmp.path())
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output();
+
+        match clone_output {
+            Ok(o) if o.status.success() => {}
+            _ => return Ok(vec![]),
+        }
 
         let toml_path = tmp.path().join("syncor.toml");
         if !toml_path.exists() {
@@ -242,7 +252,6 @@ impl SyncTransport for GitTransport {
 
         let contents = std::fs::read_to_string(&toml_path)?;
 
-        // Minimal parse — just extract link names from [[links]] entries.
         #[derive(serde::Deserialize)]
         struct Manifest {
             #[serde(default)]
@@ -270,24 +279,18 @@ impl SyncTransport for GitTransport {
 
     fn has_remote_changes(&self, link: &LinkInfo) -> Result<bool> {
         let repo_dir = self.repo_dir(link);
-        let repo = Repository::open(&repo_dir)?;
-        let branch_name = Self::primary_branch(&repo);
+        let branch = Self::primary_branch(&repo_dir);
 
         // Fetch.
-        let mut remote = repo.find_remote("origin")?;
-        remote.fetch(&[&branch_name], None, None)?;
+        let _ = Command::new("git")
+            .args(["fetch", "origin", &branch])
+            .current_dir(&repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output();
 
-        // Compare local HEAD with remote HEAD.
-        let local_oid = repo.head().ok().and_then(|h| h.target());
-        let remote_oid = repo
-            .find_reference(&format!("refs/remotes/origin/{branch_name}"))
-            .ok()
-            .and_then(|r| r.target());
+        let local = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
+        let remote = Self::git_ok(&repo_dir, &["rev-parse", &format!("origin/{}", branch)]);
 
-        match (local_oid, remote_oid) {
-            (Some(local), Some(remote)) => Ok(local != remote),
-            (None, Some(_)) => Ok(true),
-            _ => Ok(false),
-        }
+        Ok(local.trim() != remote.trim())
     }
 }

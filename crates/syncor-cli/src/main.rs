@@ -310,17 +310,19 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
         .context("failed to initialise remote")?;
 
     println!("Connected {} <- {}", local_dir.display(), repo);
-    println!("Performing initial pull...");
+    println!("Performing initial restore...");
 
-    match engine.pull(&info) {
+    // On connect, the repo was just cloned with all data.
+    // Use restore_latest to restore files from the existing store.
+    match engine.restore_latest(&info) {
         Ok(result) => {
             if result.restored {
-                println!("Pulled {} file(s).", result.files_restored);
+                println!("Restored {} file(s).", result.files_restored);
             } else {
-                println!("Already up to date.");
+                println!("No snapshots to restore.");
             }
         }
-        Err(e) => eprintln!("Warning: initial pull failed: {e}"),
+        Err(e) => eprintln!("Warning: initial restore failed: {e}"),
     }
 
     Ok(())

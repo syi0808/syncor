@@ -69,10 +69,12 @@ fn e2e_push_pull_roundtrip() {
     let transport_b = GitTransport::new(paths_b.clone());
     let engine_b = SyncEngine::new(paths_b, Box::new(transport_b));
     engine_b.init_link(&link_b).unwrap();
-    let pull_result = engine_b.pull(&link_b).unwrap();
+    // On initial connect, the clone already has the data, so pull() returns UpToDate.
+    // Use restore_latest() to restore files from the existing store.
+    let pull_result = engine_b.restore_latest(&link_b).unwrap();
     assert!(
         pull_result.restored,
-        "Machine B initial pull should restore files"
+        "Machine B initial restore should restore files"
     );
     assert!(
         pull_result.files_restored >= 2,

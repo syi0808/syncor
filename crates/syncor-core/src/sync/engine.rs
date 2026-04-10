@@ -86,6 +86,86 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Ensure syncor.toml in the repo dir lists this link.
+    fn ensure_syncor_toml(&self, link: &LinkInfo) -> Result<()> {
+        let repo_dir = self.paths.link_repo_dir(&link.id);
+        let toml_path = repo_dir.join("syncor.toml");
+
+        #[derive(serde::Serialize, serde::Deserialize, Default)]
+        struct SyncorManifest {
+            #[serde(default)]
+            links: Vec<SyncorManifestLink>,
+        }
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct SyncorManifestLink {
+            name: String,
+            #[serde(default)]
+            created_at: Option<String>,
+        }
+
+        let mut manifest = if toml_path.exists() {
+            let content = std::fs::read_to_string(&toml_path)?;
+            toml::from_str(&content).unwrap_or_default()
+        } else {
+            SyncorManifest::default()
+        };
+
+        if !manifest.links.iter().any(|l| l.name == link.name) {
+            manifest.links.push(SyncorManifestLink {
+                name: link.name.clone(),
+                created_at: Some(chrono::Utc::now().to_rfc3339()),
+            });
+            let content = toml::to_string_pretty(&manifest)
+                .map_err(|e| SyncorError::Config(e.to_string()))?;
+            std::fs::write(&toml_path, content)?;
+        }
+
+        Ok(())
+    }
+
+    /// Restore the latest snapshot to the local directory.
+    /// Used for initial connect when the repo already has data.
+    pub fn restore_latest(&self, link: &LinkInfo) -> Result<PullSyncResult> {
+        let store_dir = self.store_dir(link);
+        let catalog_path = store_dir.join("catalog.sqlite");
+
+        if !catalog_path.exists() {
+            return Ok(PullSyncResult {
+                restored: false,
+                files_restored: 0,
+            });
+        }
+
+        let catalog = MetadataCatalog::open(&catalog_path)?;
+        let latest = match catalog.latest_snapshot()? {
+            Some(s) => s,
+            None => {
+                return Ok(PullSyncResult {
+                    restored: false,
+                    files_restored: 0,
+                })
+            }
+        };
+
+        use crate::sync::restore::RestorePipeline;
+        let result = RestorePipeline::run(&latest.id, &store_dir, &link.local_dir)?;
+
+        let db = self.state_db()?;
+        let state = SyncState {
+            link_id: link.id.as_str().to_string(),
+            last_local_snapshot: Some(latest.id.clone()),
+            last_remote_revision: None,
+            last_synced_snapshot_id: Some(latest.id),
+            last_sync_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+        db.upsert_sync_state(&state)?;
+
+        Ok(PullSyncResult {
+            restored: true,
+            files_restored: result.files_restored,
+        })
+    }
+
     pub fn push(&self, link: &LinkInfo) -> Result<PushSyncResult> {
         let _lock = LinkLock::acquire(&self.paths, link)?;
 
@@ -93,6 +173,9 @@ impl SyncEngine {
 
         // Save current workspace state into the store
         let save_result = SavePipeline::run(&link.local_dir, &store_dir, None)?;
+
+        // Ensure syncor.toml lists this link
+        self.ensure_syncor_toml(link)?;
 
         // Checkpoint WAL before pushing so git sees a single-file DB
         let catalog_path = store_dir.join("catalog.sqlite");

@@ -59,7 +59,10 @@ fn pull_restores_remote_files() {
     let transport_b = GitTransport::new(paths_b.clone());
     let engine_b = SyncEngine::new(paths_b, Box::new(transport_b));
     engine_b.init_link(&link_b).unwrap();
-    engine_b.pull(&link_b).unwrap();
+    // init_link clones the repo, so pull() returns UpToDate.
+    // Use restore_latest() for initial connect.
+    let result = engine_b.restore_latest(&link_b).unwrap();
+    assert!(result.restored);
 
     assert_eq!(
         fs::read_to_string(workspace_b.path().join("shared.txt")).unwrap(),
