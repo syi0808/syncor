@@ -44,3 +44,26 @@ fn restore_removes_extra_files() {
     assert!(!workspace.path().join("extra.txt").exists());
     assert!(workspace.path().join("keep.txt").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn restore_preserves_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    use syncor_core::sync::save::SavePipeline;
+
+    let workspace = TempDir::new().unwrap();
+    let store = TempDir::new().unwrap();
+
+    let script_path = workspace.path().join("run.sh");
+    fs::write(&script_path, "#!/bin/bash\necho hi").unwrap();
+    fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+
+    fs::remove_file(&script_path).unwrap();
+    RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+
+    let perms = fs::metadata(&script_path).unwrap().permissions();
+    let mode = perms.mode() & 0o777;
+    assert!(mode & 0o100 != 0, "execute bit should be preserved, got {:o}", mode);
+}

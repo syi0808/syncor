@@ -324,6 +324,12 @@ impl SyncEngine {
                     )));
                 }
 
+                let remote_modes: std::collections::HashMap<String, u32> = catalog
+                    .snapshot_manifest(&latest_remote.id)?
+                    .into_iter()
+                    .map(|e| (e.path, e.mode))
+                    .collect();
+
                 // Apply non-conflicting actions
                 let pack_set =
                     chkpt_core::store::pack::PackSet::open_all(&store_dir.join("packs"))?;
@@ -338,6 +344,12 @@ impl SyncEngine {
                                 std::fs::create_dir_all(parent)?;
                             }
                             std::fs::write(&file_path, content)?;
+                            #[cfg(unix)]
+                            if let Some(&mode) = remote_modes.get(path) {
+                                use std::os::unix::fs::PermissionsExt;
+                                let perms = std::fs::Permissions::from_mode(mode);
+                                std::fs::set_permissions(&file_path, perms)?;
+                            }
                             files_restored += 1;
                         }
                         FileAction::DeleteLocal { path } => {

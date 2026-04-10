@@ -39,6 +39,12 @@ impl RestorePipeline {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&dest, &content)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(entry.mode);
+                std::fs::set_permissions(&dest, perms)?;
+            }
             files_restored += 1;
         }
 
