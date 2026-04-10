@@ -4,7 +4,7 @@ members = ["crates/syncor-core", "crates/syncor-cli"]
 
 [workspace.dependencies]
 syncor-core = { path = "crates/syncor-core" }
-chkpt-core = { path = "../chkpt/crates/chkpt-core" }
+chkpt-core = "0.3"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

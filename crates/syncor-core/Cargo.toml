@@ -2,6 +2,11 @@
 name = "syncor-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core library for syncor — cross-machine directory sync via content-addressed storage"
+license = "MIT"
+repository = "https://github.com/syi0808/syncor"
+keywords = ["sync", "backup", "git", "content-addressable"]
+categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 chkpt-core = { workspace = true }

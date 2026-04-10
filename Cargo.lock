@@ -185,6 +185,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "chkpt-core"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1a702fb260cdf60e9da8fa9269999afc46b837e08697e9ea34a3fee7e5276c1"
 dependencies = [
  "anyhow",
  "bitcode",
@@ -195,8 +197,6 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "rusqlite",
- "serde",
- "serde_json",
  "tar",
  "tempfile",
  "thiserror",
