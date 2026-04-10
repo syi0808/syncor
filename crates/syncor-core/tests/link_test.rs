@@ -35,3 +35,11 @@ fn link_state_default_is_idle() {
     let state = LinkState::default();
     assert!(matches!(state, LinkState::Idle));
 }
+
+#[test]
+fn link_id_is_stable_xxh3() {
+    let id = LinkId::from_parts("https://github.com/user/repo.git", "dotfiles");
+    assert_eq!(id.as_str().len(), 32);
+    let id2 = LinkId::from_parts("https://github.com/user/repo.git", "dotfiles");
+    assert_eq!(id.as_str(), id2.as_str());
+}

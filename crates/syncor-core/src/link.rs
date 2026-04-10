@@ -9,11 +9,10 @@ pub struct LinkId(String);
 impl LinkId {
     /// Create a deterministic ID from repo and name components.
     pub fn from_parts(repo: &str, name: &str) -> Self {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        repo.hash(&mut hasher);
-        name.hash(&mut hasher);
-        Self(format!("{:016x}", hasher.finish()))
+        use chkpt_core::store::blob::{bytes_to_hex, hash_content_bytes};
+        let input = format!("{}\0{}", repo, name);
+        let hash = hash_content_bytes(input.as_bytes());
+        Self(bytes_to_hex(&hash))
     }
 
     pub fn as_str(&self) -> &str {
