@@ -390,6 +390,21 @@ fn cmd_unlink(dir: PathBuf) -> Result<()> {
     registry.remove(&link.id).context("failed to remove link")?;
     save_registry(&paths, &registry)?;
 
+    // Clean up on-disk state for the removed link.
+    if let Ok(db) = StateDb::open(paths.link_state_db()) {
+        let _ = db.delete_state(link.id.as_str());
+    }
+    let repo_dir = paths.link_repo_dir(&link.id);
+    if repo_dir.exists() {
+        let _ = std::fs::remove_dir_all(&repo_dir);
+        println!("  Removed repo dir: {}", repo_dir.display());
+    }
+    let lock_file = paths.link_lock_file(&link.id);
+    if lock_file.exists() {
+        let _ = std::fs::remove_file(&lock_file);
+        println!("  Removed lock file: {}", lock_file.display());
+    }
+
     println!("Unlinked {} ({})", link.name, link.local_dir.display());
     Ok(())
 }
@@ -405,6 +420,21 @@ fn cmd_disconnect(name: String) -> Result<()> {
 
     registry.remove(&link.id).context("failed to remove link")?;
     save_registry(&paths, &registry)?;
+
+    // Clean up on-disk state for the removed link.
+    if let Ok(db) = StateDb::open(paths.link_state_db()) {
+        let _ = db.delete_state(link.id.as_str());
+    }
+    let repo_dir = paths.link_repo_dir(&link.id);
+    if repo_dir.exists() {
+        let _ = std::fs::remove_dir_all(&repo_dir);
+        println!("  Removed repo dir: {}", repo_dir.display());
+    }
+    let lock_file = paths.link_lock_file(&link.id);
+    if lock_file.exists() {
+        let _ = std::fs::remove_file(&lock_file);
+        println!("  Removed lock file: {}", lock_file.display());
+    }
 
     println!("Disconnected {} ({})", link.name, link.local_dir.display());
     Ok(())
