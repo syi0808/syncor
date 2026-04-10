@@ -6,6 +6,39 @@ use crate::error::{Result, SyncorError};
 use crate::link::LinkInfo;
 use crate::transport::{ConflictInfo, PullResult, PushResult, RemoteLinkInfo, SyncTransport};
 
+/// Retry a closure up to `max_attempts` times with exponential backoff.
+fn retry_with_backoff<F, T>(max_attempts: u32, mut f: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    assert!(max_attempts >= 1, "max_attempts must be >= 1");
+    let delays = [5, 15, 45];
+    for attempt in 0..max_attempts {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let is_retryable = matches!(&e, SyncorError::Transport(msg) if
+                    msg.contains("fetch failed") ||
+                    msg.contains("push failed") ||
+                    msg.contains("Could not resolve host") ||
+                    msg.contains("Connection refused") ||
+                    msg.contains("timed out")
+                );
+                if !is_retryable || attempt + 1 >= max_attempts {
+                    return Err(e);
+                }
+                let delay = delays.get(attempt as usize).copied().unwrap_or(45);
+                tracing::warn!(
+                    "transport operation failed (attempt {}/{}), retrying in {}s: {}",
+                    attempt + 1, max_attempts, delay, e
+                );
+                std::thread::sleep(std::time::Duration::from_secs(delay));
+            }
+        }
+    }
+    unreachable!("loop always returns")
+}
+
 /// Git-backed transport using the `git` CLI for operations that need
 /// authentication (clone, fetch, push) and libgit2 for local-only work
 /// (commit, staging).  This avoids the credential-helper issues that
@@ -148,33 +181,35 @@ impl SyncTransport for GitTransport {
         Self::git(&repo_dir, &["commit", "-m", "syncor push"])?;
 
         // Push via CLI (uses system credential helpers).
-        let push_output = Command::new("git")
-            .args(["push", "-u", "origin", &branch])
-            .current_dir(&repo_dir)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| SyncorError::Transport(format!("push exec: {}", e)))?;
+        retry_with_backoff(3, || {
+            let push_output = Command::new("git")
+                .args(["push", "-u", "origin", &branch])
+                .current_dir(&repo_dir)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| SyncorError::Transport(format!("push exec: {}", e)))?;
 
-        if push_output.status.success() {
-            let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
-            Ok(PushResult::Success {
-                revision: rev.trim().to_string(),
-            })
-        } else {
-            let stderr = String::from_utf8_lossy(&push_output.stderr).to_string();
-            if stderr.contains("non-fast-forward") || stderr.contains("rejected") {
-                Ok(PushResult::Conflict {
-                    details: ConflictInfo {
-                        message: stderr.trim().to_string(),
-                    },
+            if push_output.status.success() {
+                let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
+                Ok(PushResult::Success {
+                    revision: rev.trim().to_string(),
                 })
             } else {
-                Err(SyncorError::Transport(format!(
-                    "git push failed: {}",
-                    stderr.trim()
-                )))
+                let stderr = String::from_utf8_lossy(&push_output.stderr).to_string();
+                if stderr.contains("non-fast-forward") || stderr.contains("rejected") {
+                    Ok(PushResult::Conflict {
+                        details: ConflictInfo {
+                            message: stderr.trim().to_string(),
+                        },
+                    })
+                } else {
+                    Err(SyncorError::Transport(format!(
+                        "push failed: {}",
+                        stderr.trim()
+                    )))
+                }
             }
-        }
+        })
     }
 
     fn pull(&self, link: &LinkInfo, _store_path: &Path) -> Result<PullResult> {
@@ -185,20 +220,24 @@ impl SyncTransport for GitTransport {
         let head_before = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
 
         // Fetch via CLI.
-        let fetch_output = Command::new("git")
-            .args(["fetch", "origin", &branch])
-            .current_dir(&repo_dir)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
+        retry_with_backoff(3, || {
+            let fetch_output = Command::new("git")
+                .args(["fetch", "origin", &branch])
+                .current_dir(&repo_dir)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
 
-        if !fetch_output.status.success() {
-            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
-            return Err(SyncorError::Transport(format!(
-                "git fetch failed: {}",
-                stderr.trim()
-            )));
-        }
+            if fetch_output.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&fetch_output.stderr).to_string();
+                Err(SyncorError::Transport(format!(
+                    "fetch failed: {}",
+                    stderr.trim()
+                )))
+            }
+        })?;
 
         // Compare local vs remote.
         let remote_ref = format!("origin/{}", branch);
@@ -282,11 +321,20 @@ impl SyncTransport for GitTransport {
         let branch = Self::primary_branch(&repo_dir);
 
         // Fetch.
-        let _ = Command::new("git")
+        let fetch_output = Command::new("git")
             .args(["fetch", "origin", &branch])
             .current_dir(&repo_dir)
             .env("GIT_TERMINAL_PROMPT", "0")
-            .output();
+            .output()
+            .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
+
+        if !fetch_output.status.success() {
+            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+            return Err(SyncorError::Transport(format!(
+                "git fetch failed: {}",
+                stderr.trim()
+            )));
+        }
 
         let local = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
         let remote = Self::git_ok(&repo_dir, &["rev-parse", &format!("origin/{}", branch)]);
