@@ -69,3 +69,35 @@ fn pull_restores_remote_files() {
         "shared content"
     );
 }
+
+#[test]
+fn restore_latest_updates_file_index() {
+    let (workspace_a, _remote, data_dir_a, link_a) = setup();
+    let workspace_b = TempDir::new().unwrap();
+    let data_dir_b = TempDir::new().unwrap();
+
+    fs::write(workspace_a.path().join("data.txt"), "some data").unwrap();
+    let paths_a = SyncorPaths::with_home(data_dir_a.path());
+    let transport_a = GitTransport::new(paths_a.clone());
+    let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
+    engine_a.init_link(&link_a).unwrap();
+    engine_a.push(&link_a).unwrap();
+
+    let mut link_b = link_a.clone();
+    link_b.local_dir = workspace_b.path().to_path_buf();
+    link_b.mode = LinkMode::Pull;
+    let paths_b = SyncorPaths::with_home(data_dir_b.path());
+    let transport_b = GitTransport::new(paths_b.clone());
+    let engine_b = SyncEngine::new(paths_b.clone(), Box::new(transport_b));
+    engine_b.init_link(&link_b).unwrap();
+    engine_b.restore_latest(&link_b).unwrap();
+
+    // Verify index.bin exists and has entries
+    let store_dir = paths_b.link_repo_dir(&link_b.id).join("stores").join(&link_b.name);
+    let index_path = store_dir.join("index.bin");
+    assert!(index_path.exists(), "index.bin should exist after restore_latest");
+
+    let index = chkpt_core::index::FileIndex::open(&index_path).unwrap();
+    let paths_in_index = index.all_paths().unwrap();
+    assert!(paths_in_index.contains(&"data.txt".to_string()), "index should contain data.txt");
+}

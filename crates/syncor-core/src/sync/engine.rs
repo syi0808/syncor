@@ -64,6 +64,42 @@ impl SyncEngine {
         Self { paths, transport }
     }
 
+    /// Scan workspace and update the FileIndex so the next push skips unchanged files.
+    fn update_file_index(&self, link: &LinkInfo, store_dir: &std::path::Path) -> Result<()> {
+        use chkpt_core::index::{FileEntry, FileIndex};
+        use chkpt_core::scanner::scan_workspace;
+        use chkpt_core::store::blob::hash_path_bytes;
+
+        let index_path = store_dir.join("index.bin");
+        let mut index = FileIndex::open(&index_path)?;
+
+        let scanned = scan_workspace(&link.local_dir, None)?;
+        let mut entries = Vec::new();
+        for file in &scanned {
+            let hash = hash_path_bytes(&file.absolute_path, file.is_symlink)?;
+            entries.push(FileEntry {
+                path: file.relative_path.clone(),
+                blob_hash: hash,
+                size: file.size,
+                mtime_secs: file.mtime_secs,
+                mtime_nanos: file.mtime_nanos,
+                inode: file.inode,
+                mode: file.mode,
+            });
+        }
+
+        let scanned_paths: std::collections::HashSet<&str> =
+            scanned.iter().map(|f| f.relative_path.as_str()).collect();
+        let all_indexed = index.all_paths()?;
+        let removed: Vec<String> = all_indexed
+            .into_iter()
+            .filter(|p| !scanned_paths.contains(p.as_str()))
+            .collect();
+
+        index.apply_changes(&removed, &entries)?;
+        Ok(())
+    }
+
     fn store_dir(&self, link: &LinkInfo) -> PathBuf {
         self.paths
             .link_repo_dir(&link.id)
@@ -149,6 +185,8 @@ impl SyncEngine {
 
         use crate::sync::restore::RestorePipeline;
         let result = RestorePipeline::run(&latest.id, &store_dir, &link.local_dir)?;
+
+        self.update_file_index(link, &store_dir)?;
 
         let db = self.state_db()?;
         let state = SyncState {
@@ -359,6 +397,8 @@ impl SyncEngine {
                         FileAction::Conflict(_) => {} // already handled above
                     }
                 }
+
+                self.update_file_index(link, &store_dir)?;
 
                 // Copy merged catalog back to repo dir
                 checkpoint_wal(&local_catalog_path)?;
