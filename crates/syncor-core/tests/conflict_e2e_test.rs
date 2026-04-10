@@ -10,6 +10,7 @@ use syncor_core::link::{LinkId, LinkInfo, LinkMode};
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
+use syncor_core::transport::SyncTransport;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -498,4 +499,160 @@ fn sequential_sync_rounds() {
     b.engine().pull(&b.link).unwrap();
     assert!(!b.exists("file.txt"));
     assert_eq!(b.read("new.txt"), "round3"); // still there
+}
+
+// ---------------------------------------------------------------------------
+// Bidirectional sync
+// ---------------------------------------------------------------------------
+
+/// Both machines push AND pull across multiple rounds.
+#[test]
+fn bidirectional_sync_rounds() {
+    let (_remote, a, b) = two_machines("bidir-sync");
+
+    // Round 1: A pushes file1, B pulls and verifies
+    a.write("file1.txt", "from-a-v1");
+    bootstrap(&a, &b);
+    assert_eq!(b.read("file1.txt"), "from-a-v1");
+
+    // Round 2: B modifies file1, adds file2, pushes; A pulls and verifies
+    b.write("file1.txt", "from-b-v1");
+    b.write("file2.txt", "new-from-b");
+    b.engine().push(&b.link).unwrap();
+    a.engine().pull(&a.link).unwrap();
+    assert_eq!(a.read("file1.txt"), "from-b-v1");
+    assert_eq!(a.read("file2.txt"), "new-from-b");
+
+    // Round 3: A modifies file2, pushes; B pulls and verifies
+    a.write("file2.txt", "modified-by-a");
+    a.engine().push(&a.link).unwrap();
+    b.engine().pull(&b.link).unwrap();
+    assert_eq!(b.read("file2.txt"), "modified-by-a");
+    assert_eq!(b.read("file1.txt"), "from-b-v1"); // unchanged
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent push conflict
+// ---------------------------------------------------------------------------
+
+/// Two machines push without pulling — second push should fail with conflict.
+#[test]
+fn concurrent_push_detects_conflict() {
+    let (_remote, a, b) = two_machines("concurrent-push");
+
+    a.write("shared.txt", "initial");
+    bootstrap(&a, &b);
+
+    // A modifies and pushes
+    a.write("shared.txt", "from-a");
+    a.engine().push(&a.link).unwrap();
+
+    // B modifies and pushes WITHOUT pulling first → should conflict
+    b.write("shared.txt", "from-b");
+    let result = b.engine().push(&b.link);
+
+    assert!(
+        result.is_err(),
+        "B's push without pull should fail with conflict"
+    );
+    let err = result.unwrap_err().to_string();
+    // The error comes from git non-fast-forward rejection
+    assert!(
+        err.to_lowercase().contains("conflict")
+            || err.to_lowercase().contains("non-fast-forward")
+            || err.to_lowercase().contains("rejected"),
+        "error should indicate conflict: {}",
+        err
+    );
+}
+
+// ---------------------------------------------------------------------------
+// has_remote_changes detection
+// ---------------------------------------------------------------------------
+
+/// has_remote_changes reflects whether new pushes exist on the remote.
+#[test]
+fn has_remote_changes_detects_new_push() {
+    let (_remote, a, b) = two_machines("has-remote-changes");
+
+    a.write("data.txt", "v1");
+    bootstrap(&a, &b);
+
+    // B just synced — no remote changes
+    let transport_b = GitTransport::new(b.paths.clone());
+    assert!(
+        !transport_b.has_remote_changes(&b.link).unwrap(),
+        "should be up-to-date right after bootstrap"
+    );
+
+    // A pushes new content
+    a.write("data.txt", "v2");
+    a.engine().push(&a.link).unwrap();
+
+    // B should detect remote changes
+    assert!(
+        transport_b.has_remote_changes(&b.link).unwrap(),
+        "should detect A's push as remote change"
+    );
+
+    // B pulls
+    b.engine().pull(&b.link).unwrap();
+    assert_eq!(b.read("data.txt"), "v2");
+
+    // After pulling, no more remote changes
+    assert!(
+        !transport_b.has_remote_changes(&b.link).unwrap(),
+        "should be up-to-date after pull"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// list_remote_links discovery
+// ---------------------------------------------------------------------------
+
+/// list_remote_links discovers link names from a repo's syncor.toml.
+#[test]
+fn list_remote_links_discovers_links() {
+    let (remote, a, _b) = two_machines("list-links");
+
+    // A links and pushes (push creates syncor.toml via ensure_syncor_toml)
+    a.write("file.txt", "content");
+    a.engine().init_link(&a.link).unwrap();
+    a.engine().push(&a.link).unwrap();
+
+    // Use transport to list remote links from the bare repo URL
+    let transport = GitTransport::new(a.paths.clone());
+    let repo_url = remote.path().to_str().unwrap();
+    let links = transport.list_remote_links(repo_url).unwrap();
+
+    assert!(
+        !links.is_empty(),
+        "should discover at least one link in the remote"
+    );
+    assert!(
+        links.iter().any(|l| l.name == "list-links"),
+        "should find the 'list-links' link name, got: {:?}",
+        links.iter().map(|l| &l.name).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Pull when already up to date
+// ---------------------------------------------------------------------------
+
+/// Pulling when already synced returns restored: false.
+#[test]
+fn pull_when_up_to_date_returns_no_change() {
+    let (_remote, a, b) = two_machines("up-to-date");
+
+    a.write("file.txt", "content");
+    bootstrap(&a, &b);
+    assert_eq!(b.read("file.txt"), "content");
+
+    // B pulls again immediately — nothing has changed on remote
+    let result = b.engine().pull(&b.link).unwrap();
+    assert!(
+        !result.restored,
+        "second pull with no remote changes should return restored: false"
+    );
 }
