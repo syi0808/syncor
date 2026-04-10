@@ -560,21 +560,46 @@ async fn cmd_daemon_start() -> Result<()> {
 
 fn cmd_daemon_stop() -> Result<()> {
     let paths = load_paths()?;
-    let pid_path = paths.pid_file();
 
-    if !pid_path.exists() {
+    if !DaemonManager::is_running(&paths) {
         println!("Daemon is not running.");
         return Ok(());
     }
 
-    let pid_str = std::fs::read_to_string(&pid_path).context("failed to read PID file")?;
-    let pid: i32 = pid_str.trim().parse().context("invalid PID")?;
-
-    unsafe {
-        libc::kill(pid, libc::SIGTERM);
+    // Validate via IPC socket before sending signal
+    let sock = paths.socket_path();
+    if sock.exists() {
+        match std::os::unix::net::UnixStream::connect(&sock) {
+            Ok(_stream) => {
+                // Socket connectable = likely our daemon (not 100% — another process
+                // could theoretically listen on the same path, but unlikely in practice).
+                let pid_file = paths.pid_file();
+                if let Ok(content) = std::fs::read_to_string(&pid_file) {
+                    if let Ok(pid) = content.trim().parse::<i32>() {
+                        unsafe { libc::kill(pid, libc::SIGTERM) };
+                        for _ in 0..10 {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            if !DaemonManager::is_running(&paths) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // Socket not connectable — stale files
+                DaemonManager::cleanup_stale(&paths);
+            }
+        }
     }
 
-    println!("Sent stop signal to daemon (pid {pid}).");
+    if DaemonManager::is_running(&paths) {
+        println!("Daemon did not stop gracefully. Cleaning up stale files.");
+    } else {
+        println!("Daemon stopped.");
+    }
+    DaemonManager::cleanup_stale(&paths);
+
     Ok(())
 }
 
