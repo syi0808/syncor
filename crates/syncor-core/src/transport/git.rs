@@ -30,7 +30,10 @@ where
                 let delay = delays.get(attempt as usize).copied().unwrap_or(45);
                 tracing::warn!(
                     "transport operation failed (attempt {}/{}), retrying in {}s: {}",
-                    attempt + 1, max_attempts, delay, e
+                    attempt + 1,
+                    max_attempts,
+                    delay,
+                    e
                 );
                 std::thread::sleep(std::time::Duration::from_secs(delay));
             }

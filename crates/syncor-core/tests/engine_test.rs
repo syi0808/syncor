@@ -93,11 +93,20 @@ fn restore_latest_updates_file_index() {
     engine_b.restore_latest(&link_b).unwrap();
 
     // Verify index.bin exists and has entries
-    let store_dir = paths_b.link_repo_dir(&link_b.id).join("stores").join(&link_b.name);
+    let store_dir = paths_b
+        .link_repo_dir(&link_b.id)
+        .join("stores")
+        .join(&link_b.name);
     let index_path = store_dir.join("index.bin");
-    assert!(index_path.exists(), "index.bin should exist after restore_latest");
+    assert!(
+        index_path.exists(),
+        "index.bin should exist after restore_latest"
+    );
 
     let index = chkpt_core::index::FileIndex::open(&index_path).unwrap();
     let paths_in_index = index.all_paths().unwrap();
-    assert!(paths_in_index.contains(&"data.txt".to_string()), "index should contain data.txt");
+    assert!(
+        paths_in_index.contains(&"data.txt".to_string()),
+        "index should contain data.txt"
+    );
 }

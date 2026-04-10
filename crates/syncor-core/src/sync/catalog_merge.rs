@@ -8,10 +8,7 @@ pub fn merge_catalogs(local_path: &Path, remote_path: &Path) -> Result<()> {
     let remote_str = remote_path.to_str().ok_or_else(|| {
         crate::error::SyncorError::Other("non-UTF-8 path for remote catalog".into())
     })?;
-    conn.execute(
-        "ATTACH DATABASE ?1 AS remote",
-        [remote_str],
-    )?;
+    conn.execute("ATTACH DATABASE ?1 AS remote", [remote_str])?;
 
     conn.execute_batch(
         "

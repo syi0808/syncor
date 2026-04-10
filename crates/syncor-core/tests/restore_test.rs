@@ -65,5 +65,9 @@ fn restore_preserves_file_permissions() {
 
     let perms = fs::metadata(&script_path).unwrap().permissions();
     let mode = perms.mode() & 0o777;
-    assert!(mode & 0o100 != 0, "execute bit should be preserved, got {:o}", mode);
+    assert!(
+        mode & 0o100 != 0,
+        "execute bit should be preserved, got {:o}",
+        mode
+    );
 }
