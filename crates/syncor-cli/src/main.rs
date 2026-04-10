@@ -157,6 +157,17 @@ fn make_engine(paths: &SyncorPaths) -> SyncEngine {
     SyncEngine::new(paths.clone(), Box::new(transport))
 }
 
+/// Roll back a failed link: remove from registry and clean up on-disk state.
+fn rollback_link(paths: &SyncorPaths, registry: &mut LinksRegistry, info: &LinkInfo) {
+    let _ = registry.remove(&info.id);
+    let _ = save_registry(paths, registry);
+    let _ = std::fs::remove_dir_all(paths.link_repo_dir(&info.id));
+    let _ = std::fs::remove_file(paths.link_lock_file(&info.id));
+    if let Ok(db) = StateDb::open(paths.link_state_db()) {
+        let _ = db.delete_state(info.id.as_str());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
@@ -209,9 +220,11 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     save_registry(&paths, &registry)?;
 
     let engine = make_engine(&paths);
-    engine
-        .init_link(&info)
-        .context("failed to initialise remote")?;
+    if let Err(e) = engine.init_link(&info) {
+        eprintln!("Failed to initialise remote: {e}");
+        rollback_link(&paths, &mut registry, &info);
+        bail!("link failed: could not initialise remote");
+    }
 
     println!("Linked {} -> {}", canonical.display(), repo_url);
     println!("Performing initial push...");
@@ -227,7 +240,12 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
                 println!("Nothing to push.");
             }
         }
-        Err(e) => eprintln!("Warning: initial push failed: {e}"),
+        Err(e) => {
+            eprintln!("Initial push failed: {e}");
+            eprintln!("Rolling back link registration...");
+            rollback_link(&paths, &mut registry, &info);
+            bail!("link failed: initial push could not complete");
+        }
     }
 
     Ok(())
