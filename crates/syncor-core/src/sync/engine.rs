@@ -510,7 +510,14 @@ impl SyncEngine {
                             }
                             FileAction::DeleteLocal { path } => {
                                 if let Ok(file_path) = validate_path(mount, path) {
-                                    let _ = std::fs::remove_file(&file_path);
+                                    match std::fs::remove_file(&file_path) {
+                                        Ok(()) => {}
+                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                        Err(e) => {
+                                            mount_err = Some(e.to_string());
+                                            break 'actions;
+                                        }
+                                    }
                                 }
                             }
                             FileAction::Conflict(_) => {}
