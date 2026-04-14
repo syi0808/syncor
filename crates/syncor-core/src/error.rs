@@ -23,6 +23,9 @@ pub enum SyncorError {
     #[error("link already exists: {0}")]
     LinkAlreadyExists(String),
 
+    #[error("multi-mount not allowed: {0}")]
+    MultiMountNotAllowed(String),
+
     #[error("transport error: {0}")]
     Transport(String),
 
