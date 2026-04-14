@@ -157,14 +157,31 @@ fn make_engine(paths: &SyncorPaths) -> SyncEngine {
     SyncEngine::new(paths.clone(), Box::new(transport))
 }
 
-/// Roll back a failed link: remove from registry and clean up on-disk state.
-fn rollback_link(paths: &SyncorPaths, registry: &mut LinksRegistry, info: &LinkInfo) {
-    let _ = registry.remove(&info.id);
-    let _ = save_registry(paths, registry);
-    let _ = std::fs::remove_dir_all(paths.link_repo_dir(&info.id));
-    let _ = std::fs::remove_file(paths.link_lock_file(&info.id));
-    if let Ok(db) = StateDb::open(paths.link_state_db()) {
-        let _ = db.delete_state(info.id.as_str());
+enum RollbackKind<'a> {
+    /// A new link was registered; undo fully: remove registry row, repo dir,
+    /// lock file, state DB row.
+    NewLink { info: &'a LinkInfo },
+    /// An existing link gained a mount; undo just that mount. Leaves other
+    /// mounts, the clone, state, and lock intact.
+    MountAdded { id: &'a LinkId, dir: &'a std::path::Path },
+}
+
+fn rollback(paths: &SyncorPaths, registry: &mut LinksRegistry, kind: RollbackKind) {
+    match kind {
+        RollbackKind::NewLink { info } => {
+            let _ = registry.remove(&info.id);
+            let _ = save_registry(paths, registry);
+            let _ = std::fs::remove_dir_all(paths.link_repo_dir(&info.id));
+            let _ = std::fs::remove_file(paths.link_lock_file(&info.id));
+            if let Ok(db) = StateDb::open(paths.link_state_db()) {
+                let _ = db.delete_state(info.id.as_str());
+            }
+        }
+        RollbackKind::MountAdded { id, dir } => {
+            let _ = registry.remove_mount(id, dir);
+            let _ = save_registry(paths, registry);
+            // Intentionally: do NOT touch link_repo_dir, lock file, or state.
+        }
     }
 }
 
@@ -222,7 +239,7 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     let engine = make_engine(&paths);
     if let Err(e) = engine.init_link(&info) {
         eprintln!("Failed to initialise remote: {e}");
-        rollback_link(&paths, &mut registry, &info);
+        rollback(&paths, &mut registry, RollbackKind::NewLink { info: &info });
         bail!("link failed: could not initialise remote");
     }
 
@@ -243,7 +260,7 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
         Err(e) => {
             eprintln!("Initial push failed: {e}");
             eprintln!("Rolling back link registration...");
-            rollback_link(&paths, &mut registry, &info);
+            rollback(&paths, &mut registry, RollbackKind::NewLink { info: &info });
             bail!("link failed: initial push could not complete");
         }
     }
