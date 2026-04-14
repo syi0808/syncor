@@ -234,3 +234,176 @@ fn failed_init_link_leaves_registry_clean() {
         "state DB should have no sync_state row for the failed link id"
     );
 }
+
+/// When attempting to add a second mount to an already-connected pull link, a
+/// failure during `engine.restore_latest_to` must be rolled back via
+/// `RollbackKind::MountAdded`: the new mount is removed from the registry but
+/// the existing mount, repo clone, and state-DB row are left intact.
+///
+/// We induce restore failure by making the second mount's parent directory
+/// read-only (chmod 0o555), so the restore pipeline cannot create the target
+/// subtree. A scope guard restores permissions to 0o755 regardless of test
+/// outcome so the tempdir can be cleaned up.
+#[cfg(unix)]
+#[test]
+fn failed_add_mount_preserves_existing_mount_and_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Scope guard: restore perms on drop so tempdir cleanup succeeds even on
+    // panic.
+    struct PermGuard {
+        path: std::path::PathBuf,
+    }
+    impl Drop for PermGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(
+                &self.path,
+                std::fs::Permissions::from_mode(0o755),
+            );
+        }
+    }
+
+    // --- Setup: bare git remote, Machine A workspace + data dir, Machine B
+    //     data dir and one mount dir (b1). ---
+    let remote_dir = TempDir::new().unwrap();
+    let workspace_a = TempDir::new().unwrap();
+    let data_dir_a = TempDir::new().unwrap();
+    let data_dir_b = TempDir::new().unwrap();
+    let b1 = TempDir::new().unwrap();
+    // A scratch tempdir to host the read-only parent; the tempdir itself must
+    // stay writable so Drop cleanup can remove the readonly child.
+    let scratch = TempDir::new().unwrap();
+
+    git2::Repository::init_bare(remote_dir.path()).unwrap();
+    let remote_url = remote_dir.path().to_str().unwrap().to_string();
+    let link_name = "rollback-add-mount-link";
+
+    // --- Machine A: push a single file so Machine B has something to restore.
+    fs::write(workspace_a.path().join("hello.txt"), b"hello multi-mount\n").unwrap();
+
+    let link_a = LinkInfo {
+        id: LinkId::from_parts(&remote_url, link_name),
+        name: link_name.to_string(),
+        repo: remote_url.clone(),
+        local_dirs: vec![workspace_a.path().to_path_buf()],
+        mode: LinkMode::Push,
+        poll_interval_secs: None,
+    };
+
+    let paths_a = SyncorPaths::with_home(data_dir_a.path());
+    let transport_a = GitTransport::new(paths_a.clone());
+    let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
+    engine_a.init_link(&link_a).unwrap();
+    let push_result = engine_a.push(&link_a).unwrap();
+    assert!(push_result.pushed, "Machine A push should succeed");
+
+    // --- Machine B: initial connect with single mount b1 (succeeds). ---
+    let paths_b = SyncorPaths::with_home(data_dir_b.path());
+    paths_b.ensure_dirs().unwrap();
+
+    let link_b_initial = LinkInfo {
+        id: LinkId::from_parts(&remote_url, link_name),
+        name: link_name.to_string(),
+        repo: remote_url.clone(),
+        local_dirs: vec![b1.path().to_path_buf()],
+        mode: LinkMode::Pull,
+        poll_interval_secs: None,
+    };
+    let id = link_b_initial.id.clone();
+
+    let mut registry = LinksRegistry::load(&paths_b.links_file()).unwrap();
+    registry.add(link_b_initial.clone()).unwrap();
+    registry.save(&paths_b.links_file()).unwrap();
+
+    let transport_b = GitTransport::new(paths_b.clone());
+    let engine_b = SyncEngine::new(paths_b.clone(), Box::new(transport_b));
+    engine_b.init_link(&link_b_initial).unwrap();
+    let restore = engine_b.restore_latest(&link_b_initial).unwrap();
+    assert!(restore.restored, "initial restore into b1 should succeed");
+
+    // Confirm precondition: b1 has the expected file, state DB row exists,
+    // repo dir exists.
+    assert_eq!(
+        fs::read(b1.path().join("hello.txt")).unwrap(),
+        b"hello multi-mount\n",
+        "b1 should contain the file A pushed"
+    );
+    {
+        let db = StateDb::open(paths_b.link_state_db()).unwrap();
+        assert!(
+            db.get_sync_state(id.as_str()).unwrap().is_some(),
+            "state DB should have sync_state row after initial restore"
+        );
+    }
+    assert!(
+        paths_b.link_repo_dir(&id).exists(),
+        "link repo dir should exist after initial init_link"
+    );
+
+    // --- Prepare the failing second mount. ---
+    let readonly_parent = scratch.path().join("readonly");
+    std::fs::create_dir(&readonly_parent).unwrap();
+    let b2 = readonly_parent.join("target");
+    // Install the scope guard BEFORE chmod so we always restore perms, even
+    // if subsequent setup panics.
+    let _perm_guard = PermGuard {
+        path: readonly_parent.clone(),
+    };
+    std::fs::set_permissions(
+        &readonly_parent,
+        std::fs::Permissions::from_mode(0o555),
+    )
+    .unwrap();
+
+    // --- Simulate cmd_connect's add-mount branch. ---
+    // 1. Register the new mount.
+    registry.add_mount(&id, b2.clone()).unwrap();
+    registry.save(&paths_b.links_file()).unwrap();
+
+    // 2. Attempt the restore into b2 — expect failure because the parent is
+    //    read-only and restore cannot create b2 or write into it.
+    let info_after = registry.get_by_id(&id).expect("just added mount").clone();
+    let restore_err = engine_b.restore_latest_to(&info_after, &b2);
+    assert!(
+        restore_err.is_err(),
+        "restore_latest_to into a read-only parent should fail; got {:?}",
+        restore_err
+    );
+
+    // 3. Manually run RollbackKind::MountAdded cleanup: remove only the new
+    //    mount from the registry; leave repo_dir, state, and lock untouched.
+    registry.remove_mount(&id, &b2).unwrap();
+    registry.save(&paths_b.links_file()).unwrap();
+
+    // --- Assertions: (a) registry has only b1, (b) repo dir intact,
+    //     (c) state DB row intact, (d) b1 contents unchanged.
+    let reloaded = LinksRegistry::load(&paths_b.links_file()).unwrap();
+    let reloaded_info = reloaded
+        .get_by_id(&id)
+        .expect("link should still be registered after mount rollback");
+    assert_eq!(
+        reloaded_info.local_dirs,
+        vec![b1.path().to_path_buf()],
+        "registry should only contain the original mount b1 after rollback"
+    );
+
+    assert!(
+        paths_b.link_repo_dir(&id).exists(),
+        "link repo dir should still exist after mount-add rollback"
+    );
+
+    let db = StateDb::open(paths_b.link_state_db()).unwrap();
+    assert!(
+        db.get_sync_state(id.as_str()).unwrap().is_some(),
+        "state DB sync_state row should be preserved after mount-add rollback"
+    );
+
+    assert_eq!(
+        fs::read(b1.path().join("hello.txt")).unwrap(),
+        fs::read(workspace_a.path().join("hello.txt")).unwrap(),
+        "b1 contents should be byte-identical to A's workspace file"
+    );
+
+    // _perm_guard drops here and restores 0o755 on readonly_parent so scratch
+    // tempdir can be cleaned up.
+}
