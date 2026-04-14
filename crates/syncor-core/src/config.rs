@@ -171,6 +171,12 @@ pub struct LinksRegistry {
     by_id: HashMap<String, LinkInfo>,
 }
 
+/// Outcome of removing a single mount from a link.
+#[derive(Debug)]
+pub struct RemoveMountResult {
+    pub last_mount_removed: bool,
+}
+
 impl LinksRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -212,22 +218,98 @@ impl LinksRegistry {
     /// - A link with the same id already exists.
     /// - Another link already points at the same `local_dir` (one-dir one-link).
     pub fn add(&mut self, info: LinkInfo) -> Result<()> {
-        // Check id uniqueness.
+        if info.local_dirs.is_empty() {
+            return Err(SyncorError::Config(
+                "LinkInfo.local_dirs must be non-empty".into(),
+            ));
+        }
+        if info.mode == crate::link::LinkMode::Push && info.local_dirs.len() != 1 {
+            return Err(SyncorError::MultiMountNotAllowed(
+                "push-mode links must have exactly one mount".into(),
+            ));
+        }
         if self.by_id.contains_key(info.id.as_str()) {
             return Err(SyncorError::LinkAlreadyExists(format!(
                 "id {} already registered",
                 info.id
             )));
         }
-        // Enforce the one-dir / one-link constraint.
-        if self.get_by_dir(&info.local_dirs[0]).is_some() {
-            return Err(SyncorError::LinkAlreadyExists(format!(
-                "directory {} is already managed by another link",
-                info.local_dirs[0].display()
-            )));
+        for dir in &info.local_dirs {
+            if self.get_by_dir(dir).is_some() {
+                return Err(SyncorError::LinkAlreadyExists(format!(
+                    "directory {} is already managed by another link",
+                    dir.display()
+                )));
+            }
         }
         self.by_id.insert(info.id.as_str().to_owned(), info);
         Ok(())
+    }
+
+    /// Add a mount directory to an existing link.
+    ///
+    /// Errors:
+    /// - `LinkNotFound` if `id` is not registered.
+    /// - `MultiMountNotAllowed` if the link is push-mode.
+    /// - `LinkAlreadyExists` if `dir` belongs to a different link.
+    ///
+    /// No-op (Ok) if `dir` is already in this link's `local_dirs`.
+    pub fn add_mount(&mut self, id: &LinkId, dir: PathBuf) -> Result<()> {
+        // One-dir / one-link check across the whole registry, excluding this link.
+        if let Some(owner) = self.get_by_dir(&dir) {
+            if &owner.id != id {
+                return Err(SyncorError::LinkAlreadyExists(format!(
+                    "directory {} is already managed by another link",
+                    dir.display()
+                )));
+            }
+        }
+
+        let info = self
+            .by_id
+            .get_mut(id.as_str())
+            .ok_or_else(|| SyncorError::LinkNotFound(id.to_string()))?;
+
+        if info.mode == crate::link::LinkMode::Push {
+            return Err(SyncorError::MultiMountNotAllowed(format!(
+                "link {} is push-mode; only pull-mode links support multi-mount",
+                info.name
+            )));
+        }
+
+        if !info.local_dirs.contains(&dir) {
+            info.local_dirs.push(dir);
+        }
+        Ok(())
+    }
+
+    /// Remove a single mount directory from a link.
+    ///
+    /// If it was the last mount, the link record is retained (with empty
+    /// `local_dirs`) and `last_mount_removed == true` is returned so the caller
+    /// can decide whether to also call `remove` and clean up on-disk state.
+    pub fn remove_mount(&mut self, id: &LinkId, dir: &Path) -> Result<RemoveMountResult> {
+        let info = self
+            .by_id
+            .get_mut(id.as_str())
+            .ok_or_else(|| SyncorError::LinkNotFound(id.to_string()))?;
+
+        let pos = info
+            .local_dirs
+            .iter()
+            .position(|d| d == dir)
+            .ok_or_else(|| {
+                SyncorError::LinkNotFound(format!(
+                    "directory {} is not a mount of link {}",
+                    dir.display(),
+                    info.name
+                ))
+            })?;
+
+        info.local_dirs.remove(pos);
+        Ok(RemoveMountResult {
+            last_mount_removed: info.local_dirs.is_empty(),
+        })
     }
 
     /// Remove a link by its id.  Returns an error if not found.
