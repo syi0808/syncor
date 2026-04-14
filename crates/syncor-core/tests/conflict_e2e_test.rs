@@ -68,7 +68,7 @@ fn two_machines(link_name: &str) -> (TempDir, Machine, Machine) {
             id: LinkId::from_parts(&url, link_name),
             name: link_name.to_string(),
             repo: url.clone(),
-            local_dir: workspace.path().to_path_buf(),
+            local_dirs: vec![workspace.path().to_path_buf()],
             mode,
             poll_interval_secs: None,
         };

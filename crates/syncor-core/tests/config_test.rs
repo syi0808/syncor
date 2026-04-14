@@ -38,7 +38,7 @@ fn links_registry_add_and_get() {
         id: LinkId::from_parts("repo", "dotfiles"),
         name: "dotfiles".to_string(),
         repo: "repo".to_string(),
-        local_dir: "/home/user/dotfiles".into(),
+        local_dirs: vec!["/home/user/dotfiles".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -57,7 +57,7 @@ fn links_registry_rejects_duplicate_dir() {
         id: LinkId::from_parts("repo-a", "name1"),
         name: "name1".to_string(),
         repo: "repo-a".to_string(),
-        local_dir: "/same/dir".into(),
+        local_dirs: vec!["/same/dir".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -65,7 +65,7 @@ fn links_registry_rejects_duplicate_dir() {
         id: LinkId::from_parts("repo-b", "name2"),
         name: "name2".to_string(),
         repo: "repo-b".to_string(),
-        local_dir: "/same/dir".into(),
+        local_dirs: vec!["/same/dir".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };

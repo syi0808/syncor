@@ -20,7 +20,7 @@ fn link_info_roundtrip_serde() {
         id: LinkId::from_parts("my-repo", "dotfiles"),
         name: "dotfiles".to_string(),
         repo: "my-repo".to_string(),
-        local_dir: "/home/user/dotfiles".into(),
+        local_dirs: vec!["/home/user/dotfiles".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };

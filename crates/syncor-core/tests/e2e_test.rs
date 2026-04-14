@@ -37,7 +37,7 @@ fn e2e_push_pull_roundtrip() {
         id: LinkId::from_parts(&remote_url, "e2e-link"),
         name: "e2e-link".to_string(),
         repo: remote_url.clone(),
-        local_dir: workspace_a.path().to_path_buf(),
+        local_dirs: vec![workspace_a.path().to_path_buf()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -59,7 +59,7 @@ fn e2e_push_pull_roundtrip() {
         id: LinkId::from_parts(&remote_url, "e2e-link"),
         name: "e2e-link".to_string(),
         repo: remote_url.clone(),
-        local_dir: workspace_b.path().to_path_buf(),
+        local_dirs: vec![workspace_b.path().to_path_buf()],
         mode: LinkMode::Pull,
         poll_interval_secs: None,
     };

@@ -15,7 +15,7 @@ fn setup() -> (TempDir, TempDir, TempDir, LinkInfo) {
         id: LinkId::from_parts(&remote_url, "test"),
         name: "test".to_string(),
         repo: remote_url,
-        local_dir: workspace.path().to_path_buf(),
+        local_dirs: vec![workspace.path().to_path_buf()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -52,7 +52,7 @@ fn pull_restores_remote_files() {
     engine_a.push(&link_a).unwrap();
 
     let mut link_b = link_a.clone();
-    link_b.local_dir = workspace_b.path().to_path_buf();
+    link_b.local_dirs = vec![workspace_b.path().to_path_buf()];
     link_b.mode = LinkMode::Pull;
 
     let paths_b = SyncorPaths::with_home(data_dir_b.path());
@@ -84,7 +84,7 @@ fn restore_latest_updates_file_index() {
     engine_a.push(&link_a).unwrap();
 
     let mut link_b = link_a.clone();
-    link_b.local_dir = workspace_b.path().to_path_buf();
+    link_b.local_dirs = vec![workspace_b.path().to_path_buf()];
     link_b.mode = LinkMode::Pull;
     let paths_b = SyncorPaths::with_home(data_dir_b.path());
     let transport_b = GitTransport::new(paths_b.clone());

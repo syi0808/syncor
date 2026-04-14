@@ -209,7 +209,7 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
         id,
         name: link_name.clone(),
         repo: repo_url.clone(),
-        local_dir: canonical.clone(),
+        local_dirs: vec![canonical.clone()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -312,7 +312,7 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
         id,
         name: selected_name.clone(),
         repo: repo.clone(),
-        local_dir: local_dir.clone(),
+        local_dirs: vec![local_dir.clone()],
         mode: LinkMode::Pull,
         poll_interval_secs: None,
     };
@@ -384,14 +384,14 @@ fn cmd_status(dir: Option<PathBuf>) -> Result<()> {
             "  {} [{}] ({})",
             link.name,
             mode_str,
-            link.local_dir.display()
+            link.primary_dir().display()
         );
         println!("    repo: {}", link.repo);
         println!("    last sync: {}", last_sync);
         if has_conflicts {
             println!(
                 "    !! CONFLICTS — run 'syncor resolve {}'",
-                link.local_dir.display()
+                link.primary_dir().display()
             );
         }
         println!();
@@ -423,7 +423,7 @@ fn cmd_unlink(dir: PathBuf) -> Result<()> {
         println!("  Removed lock file: {}", lock_file.display());
     }
 
-    println!("Unlinked {} ({})", link.name, link.local_dir.display());
+    println!("Unlinked {} ({})", link.name, link.primary_dir().display());
     Ok(())
 }
 
@@ -454,7 +454,11 @@ fn cmd_disconnect(name: String) -> Result<()> {
         println!("  Removed lock file: {}", lock_file.display());
     }
 
-    println!("Disconnected {} ({})", link.name, link.local_dir.display());
+    println!(
+        "Disconnected {} ({})",
+        link.name,
+        link.primary_dir().display()
+    );
     Ok(())
 }
 
@@ -507,7 +511,7 @@ fn cmd_resolve(dir: PathBuf) -> Result<()> {
                     let content = pack_set
                         .read(remote_hash)
                         .context("failed to read remote blob")?;
-                    let file_path = link.local_dir.join(&conflict.file_path);
+                    let file_path = link.primary_dir().join(&conflict.file_path);
                     if let Some(parent) = file_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
@@ -518,7 +522,7 @@ fn cmd_resolve(dir: PathBuf) -> Result<()> {
                 }
             } else {
                 // Remote deleted the file
-                let file_path = link.local_dir.join(&conflict.file_path);
+                let file_path = link.primary_dir().join(&conflict.file_path);
                 let _ = std::fs::remove_file(&file_path);
                 println!("    -> Removed local file (remote deleted).");
             }

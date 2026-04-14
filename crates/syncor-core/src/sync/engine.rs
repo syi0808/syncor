@@ -85,7 +85,8 @@ impl SyncEngine {
         let index_path = store_dir.join("index.bin");
         let mut index = FileIndex::open(&index_path)?;
 
-        let scanned = scan_workspace(&link.local_dir, None)?;
+        // TODO(multi-mount): will fan out in Task 6/8
+        let scanned = scan_workspace(link.primary_dir(), None)?;
         let mut entries = Vec::new();
         for file in &scanned {
             let hash = hash_path_bytes(&file.absolute_path, file.is_symlink)?;
@@ -196,7 +197,8 @@ impl SyncEngine {
         };
 
         use crate::sync::restore::RestorePipeline;
-        let result = RestorePipeline::run(&latest.id, &store_dir, &link.local_dir)?;
+        // TODO(multi-mount): will fan out in Task 6/8
+        let result = RestorePipeline::run(&latest.id, &store_dir, link.primary_dir())?;
 
         self.update_file_index(link, &store_dir)?;
 
@@ -222,7 +224,8 @@ impl SyncEngine {
         let store_dir = self.store_dir(link);
 
         // Save current workspace state into the store
-        let save_result = SavePipeline::run(&link.local_dir, &store_dir, None)?;
+        // TODO(multi-mount): will fan out in Task 6/8
+        let save_result = SavePipeline::run(link.primary_dir(), &store_dir, None)?;
 
         // Ensure syncor.toml lists this link
         self.ensure_syncor_toml(link)?;
@@ -328,7 +331,8 @@ impl SyncEngine {
                 let local_map: ManifestMap = {
                     use chkpt_core::scanner::scan_workspace;
                     use chkpt_core::store::blob::hash_path_bytes;
-                    let scanned = scan_workspace(&link.local_dir, None)?;
+                    // TODO(multi-mount): will fan out in Task 6/8
+                    let scanned = scan_workspace(link.primary_dir(), None)?;
                     let mut map = std::collections::HashMap::new();
                     for file in &scanned {
                         let hash = hash_path_bytes(&file.absolute_path, file.is_symlink)?;
@@ -389,7 +393,8 @@ impl SyncEngine {
                         FileAction::ApplyRemote { path, remote_hash } => {
                             let hash_hex = bytes_to_hex(remote_hash);
                             let content = pack_set.read(&hash_hex)?;
-                            let file_path = validate_path(&link.local_dir, path)?;
+                            // TODO(multi-mount): will fan out in Task 6/8
+                            let file_path = validate_path(link.primary_dir(), path)?;
                             if let Some(parent) = file_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
@@ -403,7 +408,8 @@ impl SyncEngine {
                             files_restored += 1;
                         }
                         FileAction::DeleteLocal { path } => {
-                            let file_path = validate_path(&link.local_dir, path)?;
+                            // TODO(multi-mount): will fan out in Task 6/8
+                            let file_path = validate_path(link.primary_dir(), path)?;
                             let _ = std::fs::remove_file(&file_path);
                         }
                         FileAction::Conflict(_) => {} // already handled above

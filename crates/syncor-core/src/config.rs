@@ -220,10 +220,10 @@ impl LinksRegistry {
             )));
         }
         // Enforce the one-dir / one-link constraint.
-        if self.get_by_dir(&info.local_dir).is_some() {
+        if self.get_by_dir(&info.local_dirs[0]).is_some() {
             return Err(SyncorError::LinkAlreadyExists(format!(
                 "directory {} is already managed by another link",
-                info.local_dir.display()
+                info.local_dirs[0].display()
             )));
         }
         self.by_id.insert(info.id.as_str().to_owned(), info);
@@ -245,7 +245,9 @@ impl LinksRegistry {
 
     /// Look up a link by its `local_dir`.
     pub fn get_by_dir(&self, dir: &Path) -> Option<&LinkInfo> {
-        self.by_id.values().find(|l| l.local_dir == dir)
+        self.by_id
+            .values()
+            .find(|l| l.local_dirs.iter().any(|d| d == dir))
     }
 
     /// Look up a link by its `LinkId`.

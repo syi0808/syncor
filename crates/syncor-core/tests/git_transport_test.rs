@@ -23,7 +23,7 @@ fn init_remote_clones_and_creates_structure() {
         id: LinkId::from_parts(&remote_url, "test"),
         name: "test".to_string(),
         repo: remote_url,
-        local_dir: "/tmp/test".into(),
+        local_dirs: vec!["/tmp/test".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
@@ -47,7 +47,7 @@ fn push_commits_store_files() {
         id: LinkId::from_parts(&remote_url, "mylink"),
         name: "mylink".to_string(),
         repo: remote_url,
-        local_dir: "/tmp/test".into(),
+        local_dirs: vec!["/tmp/test".into()],
         mode: LinkMode::Push,
         poll_interval_secs: None,
     };
