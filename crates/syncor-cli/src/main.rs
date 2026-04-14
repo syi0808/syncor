@@ -60,6 +60,9 @@ enum Commands {
     Disconnect {
         /// Name of the link to disconnect
         name: String,
+        /// Skip confirmation when the link has more than one mount.
+        #[arg(long)]
+        force: bool,
     },
     /// Resolve conflicts for a linked directory
     Resolve {
@@ -513,7 +516,7 @@ fn cmd_unlink(dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn cmd_disconnect(name: String) -> Result<()> {
+fn cmd_disconnect(name: String, force: bool) -> Result<()> {
     let paths = load_paths()?;
     let mut registry = load_registry(&paths)?;
 
@@ -522,10 +525,25 @@ fn cmd_disconnect(name: String) -> Result<()> {
         .with_context(|| format!("no link found with name: {name}"))?
         .clone();
 
+    if link.local_dirs.len() > 1 && !force {
+        let prompt = format!(
+            "Link {} has {} mounts:\n  - {}\nDisconnect all? [y/N]",
+            link.name,
+            link.local_dirs.len(),
+            link.local_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("\n  - ")
+        );
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt(prompt)
+            .default(false)
+            .interact()?;
+        if !confirmed {
+            bail!("disconnect cancelled");
+        }
+    }
+
     registry.remove(&link.id).context("failed to remove link")?;
     save_registry(&paths, &registry)?;
 
-    // Clean up on-disk state for the removed link.
     if let Ok(db) = StateDb::open(paths.link_state_db()) {
         let _ = db.delete_state(link.id.as_str());
     }
@@ -540,10 +558,17 @@ fn cmd_disconnect(name: String) -> Result<()> {
         println!("  Removed lock file: {}", lock_file.display());
     }
 
+    let mounts_str = link
+        .local_dirs
+        .iter()
+        .map(|d| d.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     println!(
-        "Disconnected {} ({})",
+        "Disconnected {} ({} mount(s): {})",
         link.name,
-        link.primary_dir().display()
+        link.local_dirs.len(),
+        mounts_str
     );
     Ok(())
 }
@@ -844,7 +869,7 @@ async fn main() -> Result<()> {
         Commands::Connect { repo, dir, to } => cmd_connect(repo, dir, to),
         Commands::Status { dir } => cmd_status(dir),
         Commands::Unlink { dir } => cmd_unlink(dir),
-        Commands::Disconnect { name } => cmd_disconnect(name),
+        Commands::Disconnect { name, force } => cmd_disconnect(name, force),
         Commands::Resolve { dir } => cmd_resolve(dir),
         Commands::Log { dir } => cmd_log(dir),
         Commands::Config { action } => match action {
