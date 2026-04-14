@@ -287,11 +287,7 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
                 bail!(
                     "Remote link '{}' not found. Available: {}",
                     n,
-                    remote_links
-                        .iter()
-                        .map(|l| l.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    remote_links.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
                 );
             }
             n
@@ -325,42 +321,98 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
     };
 
     let id = LinkId::from_parts(&repo, &selected_name);
-    let info = LinkInfo {
-        id,
-        name: selected_name.clone(),
-        repo: repo.clone(),
-        local_dirs: vec![local_dir.clone()],
-        mode: LinkMode::Pull,
-        poll_interval_secs: None,
-    };
 
-    registry
-        .add(info.clone())
-        .context("failed to register link")?;
-    save_registry(&paths, &registry)?;
+    match registry.get_by_id(&id).cloned() {
+        Some(existing) if existing.mode == LinkMode::Pull => {
+            if existing.local_dirs.contains(&local_dir) {
+                println!(
+                    "{} is already mounted for link {}.",
+                    local_dir.display(),
+                    existing.name
+                );
+                return Ok(());
+            }
+            if let Some(other) = registry.get_by_dir(&local_dir) {
+                bail!(
+                    "directory {} is already managed by link {}",
+                    local_dir.display(),
+                    other.name
+                );
+            }
 
-    let engine = make_engine(&paths);
-    engine
-        .init_link(&info)
-        .context("failed to initialise remote")?;
+            registry
+                .add_mount(&id, local_dir.clone())
+                .context("failed to register mount")?;
+            save_registry(&paths, &registry)?;
 
-    println!("Connected {} <- {}", local_dir.display(), repo);
-    println!("Performing initial restore...");
+            let engine = make_engine(&paths);
+            let info_after = registry.get_by_id(&id).expect("just added").clone();
+            if let Err(e) = engine.restore_latest_to(&info_after, &local_dir) {
+                eprintln!("Initial restore failed: {e}");
+                eprintln!("Rolling back mount registration...");
+                rollback(&paths, &mut registry, RollbackKind::MountAdded { id: &id, dir: &local_dir });
+                bail!("connect failed: could not restore into {}", local_dir.display());
+            }
 
-    // On connect, the repo was just cloned with all data.
-    // Use restore_latest to restore files from the existing store.
-    match engine.restore_latest(&info) {
-        Ok(result) => {
-            if result.restored {
-                println!("Restored {} file(s).", result.files_restored);
-            } else {
-                println!("No snapshots to restore.");
+            println!(
+                "Mounted {} for link {} (now {} mount(s))",
+                local_dir.display(),
+                existing.name,
+                info_after.local_dirs.len()
+            );
+            Ok(())
+        }
+        Some(existing) => {
+            // Push mode — reject. We use bail! (rather than SyncorError::LinkAlreadyExists)
+            // because the user-facing message is clearer and the spec's concern is that
+            // the push-single-mount invariant is preserved, which this achieves.
+            bail!(
+                "link {} already exists as {:?}-mode; multi-mount is pull-only",
+                existing.name, existing.mode
+            );
+        }
+        None => {
+            let info = LinkInfo {
+                id: id.clone(),
+                name: selected_name.clone(),
+                repo: repo.clone(),
+                local_dirs: vec![local_dir.clone()],
+                mode: LinkMode::Pull,
+                poll_interval_secs: None,
+            };
+            registry
+                .add(info.clone())
+                .context("failed to register link")?;
+            save_registry(&paths, &registry)?;
+
+            let engine = make_engine(&paths);
+            if let Err(e) = engine.init_link(&info) {
+                eprintln!("Failed to initialise remote: {e}");
+                rollback(&paths, &mut registry, RollbackKind::NewLink { info: &info });
+                bail!("connect failed: could not initialise remote");
+            }
+
+            println!("Connected {} <- {}", local_dir.display(), repo);
+            println!("Performing initial restore...");
+
+            match engine.restore_latest(&info) {
+                Ok(result) => {
+                    if result.restored {
+                        println!("Restored {} file(s).", result.files_restored);
+                    } else {
+                        println!("No snapshots to restore.");
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("Initial restore failed: {e}");
+                    eprintln!("Rolling back link registration...");
+                    rollback(&paths, &mut registry, RollbackKind::NewLink { info: &info });
+                    bail!("connect failed: initial restore could not complete");
+                }
             }
         }
-        Err(e) => eprintln!("Warning: initial restore failed: {e}"),
     }
-
-    Ok(())
 }
 
 fn cmd_status(dir: Option<PathBuf>) -> Result<()> {
