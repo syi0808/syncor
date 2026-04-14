@@ -93,7 +93,6 @@ impl SyncEngine {
         let index_path = store_dir.join("index.bin");
         let mut index = FileIndex::open(&index_path)?;
 
-        // TODO(multi-mount): will fan out in Task 6/8
         let scanned = scan_workspace(link.primary_dir(), None)?;
         let mut entries = Vec::new();
         for file in &scanned {
@@ -285,12 +284,17 @@ impl SyncEngine {
     }
 
     pub fn push(&self, link: &LinkInfo) -> Result<PushSyncResult> {
+        debug_assert_eq!(
+            link.local_dirs.len(),
+            1,
+            "push called with multi-mount link; registry invariants violated"
+        );
+
         let _lock = LinkLock::acquire(&self.paths, link)?;
 
         let store_dir = self.store_dir(link);
 
         // Save current workspace state into the store
-        // TODO(multi-mount): will fan out in Task 6/8
         let save_result = SavePipeline::run(link.primary_dir(), &store_dir, None)?;
 
         // Ensure syncor.toml lists this link
@@ -398,7 +402,6 @@ impl SyncEngine {
                 let local_map: ManifestMap = {
                     use chkpt_core::scanner::scan_workspace;
                     use chkpt_core::store::blob::hash_path_bytes;
-                    // TODO(multi-mount): will fan out in Task 6/8
                     let scanned = scan_workspace(link.primary_dir(), None)?;
                     let mut map = std::collections::HashMap::new();
                     for file in &scanned {
@@ -454,34 +457,74 @@ impl SyncEngine {
                 // Apply non-conflicting actions
                 let pack_set =
                     chkpt_core::store::pack::PackSet::open_all(&store_dir.join("packs"))?;
-                let mut files_restored = 0;
-                for action in &actions {
-                    match action {
-                        FileAction::ApplyRemote { path, remote_hash } => {
-                            let hash_hex = bytes_to_hex(remote_hash);
-                            let content = pack_set.read(&hash_hex)?;
-                            // TODO(multi-mount): will fan out in Task 6/8
-                            let file_path = validate_path(link.primary_dir(), path)?;
-                            if let Some(parent) = file_path.parent() {
-                                std::fs::create_dir_all(parent)?;
+                let mut per_mount: Vec<MountOutcome> =
+                    Vec::with_capacity(link.local_dirs.len());
+
+                for mount in &link.local_dirs {
+                    let mut files_restored = 0usize;
+                    let mut mount_err: Option<String> = None;
+
+                    'actions: for action in &actions {
+                        match action {
+                            FileAction::ApplyRemote { path, remote_hash } => {
+                                let hash_hex = bytes_to_hex(remote_hash);
+                                let content = match pack_set.read(&hash_hex) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        mount_err = Some(e.to_string());
+                                        break 'actions;
+                                    }
+                                };
+                                let file_path = match validate_path(mount, path) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        mount_err = Some(e.to_string());
+                                        break 'actions;
+                                    }
+                                };
+                                if let Some(parent) = file_path.parent() {
+                                    if let Err(e) = std::fs::create_dir_all(parent) {
+                                        mount_err = Some(e.to_string());
+                                        break 'actions;
+                                    }
+                                }
+                                if let Err(e) = std::fs::write(&file_path, content) {
+                                    mount_err = Some(e.to_string());
+                                    break 'actions;
+                                }
+                                #[cfg(unix)]
+                                if let Some(&mode) = remote_modes.get(path) {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    let perms = std::fs::Permissions::from_mode(mode);
+                                    let _ = std::fs::set_permissions(&file_path, perms);
+                                }
+                                files_restored += 1;
                             }
-                            std::fs::write(&file_path, content)?;
-                            #[cfg(unix)]
-                            if let Some(&mode) = remote_modes.get(path) {
-                                use std::os::unix::fs::PermissionsExt;
-                                let perms = std::fs::Permissions::from_mode(mode);
-                                std::fs::set_permissions(&file_path, perms)?;
+                            FileAction::DeleteLocal { path } => {
+                                if let Ok(file_path) = validate_path(mount, path) {
+                                    let _ = std::fs::remove_file(&file_path);
+                                }
                             }
-                            files_restored += 1;
+                            FileAction::Conflict(_) => {}
                         }
-                        FileAction::DeleteLocal { path } => {
-                            // TODO(multi-mount): will fan out in Task 6/8
-                            let file_path = validate_path(link.primary_dir(), path)?;
-                            let _ = std::fs::remove_file(&file_path);
-                        }
-                        FileAction::Conflict(_) => {} // already handled above
                     }
+                    per_mount.push(MountOutcome {
+                        dir: mount.clone(),
+                        files_restored,
+                        error: mount_err,
+                    });
                 }
+
+                let files_restored: usize = per_mount
+                    .iter()
+                    .filter(|m| m.error.is_none())
+                    .map(|m| m.files_restored)
+                    .sum();
+                // A pull is "restored" if it succeeded at the catalog level and at least
+                // one mount applied its actions without error. This preserves the
+                // historical semantic where a delete-only pull (files_restored == 0)
+                // still reports restored == true.
+                let restored = per_mount.iter().any(|m| m.error.is_none());
 
                 self.update_file_index(link, &store_dir)?;
 
@@ -500,9 +543,9 @@ impl SyncEngine {
                 db.append_log(link.id.as_str(), "pull", "success", None)?;
 
                 Ok(PullSyncResult {
-                    restored: true,
+                    restored,
                     files_restored,
-                    per_mount: vec![],
+                    per_mount,
                 })
             }
         }
