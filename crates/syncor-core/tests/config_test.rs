@@ -175,3 +175,62 @@ fn remove_mount_unknown_dir_returns_link_not_found() {
     let err = reg.remove_mount(&link.id, &PathBuf::from("/tmp/nope")).unwrap_err();
     assert!(matches!(err, SyncorError::LinkNotFound(_)));
 }
+
+#[test]
+fn registry_loads_legacy_local_dir_single_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("links.toml");
+    std::fs::write(&path, r#"
+[[links]]
+id = "abc123"
+name = "dotfiles"
+repo = "git@example.com:me/repo.git"
+local_dir = "/home/me/dotfiles"
+mode = "pull"
+"#).unwrap();
+
+    let reg = LinksRegistry::load(&path).unwrap();
+    let link = reg
+        .get_by_dir(&PathBuf::from("/home/me/dotfiles"))
+        .expect("legacy single-dir entry should load");
+    assert_eq!(link.local_dirs, vec![PathBuf::from("/home/me/dotfiles")]);
+}
+
+#[test]
+fn registry_save_rewrites_legacy_to_local_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("links.toml");
+    std::fs::write(&path, r#"
+[[links]]
+id = "abc123"
+name = "dotfiles"
+repo = "git@example.com:me/repo.git"
+local_dir = "/home/me/dotfiles"
+mode = "pull"
+"#).unwrap();
+
+    let reg = LinksRegistry::load(&path).unwrap();
+    reg.save(&path).unwrap();
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(contents.contains("local_dirs"), "save should emit local_dirs; got:\n{contents}");
+    assert!(!contents.contains("local_dir ="),
+        "legacy scalar key should be gone after save; got:\n{contents}");
+}
+
+#[test]
+fn registry_rejects_entry_with_both_local_dir_and_local_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("links.toml");
+    std::fs::write(&path, r#"
+[[links]]
+id = "abc123"
+name = "dotfiles"
+repo = "git@example.com:me/repo.git"
+local_dir = "/home/me/dotfiles"
+local_dirs = ["/home/me/other"]
+mode = "pull"
+"#).unwrap();
+
+    let err = LinksRegistry::load(&path).unwrap_err();
+    assert!(matches!(err, SyncorError::Config(_)));
+}
