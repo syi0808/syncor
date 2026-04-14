@@ -166,7 +166,10 @@ enum RollbackKind<'a> {
     NewLink { info: &'a LinkInfo },
     /// An existing link gained a mount; undo just that mount. Leaves other
     /// mounts, the clone, state, and lock intact.
-    MountAdded { id: &'a LinkId, dir: &'a std::path::Path },
+    MountAdded {
+        id: &'a LinkId,
+        dir: &'a std::path::Path,
+    },
 }
 
 fn rollback(paths: &SyncorPaths, registry: &mut LinksRegistry, kind: RollbackKind) {
@@ -290,7 +293,11 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
                 bail!(
                     "Remote link '{}' not found. Available: {}",
                     n,
-                    remote_links.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+                    remote_links
+                        .iter()
+                        .map(|l| l.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
             }
             n
@@ -353,8 +360,18 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
             if let Err(e) = engine.restore_latest_to(&info_after, &local_dir) {
                 eprintln!("Initial restore failed: {e}");
                 eprintln!("Rolling back mount registration...");
-                rollback(&paths, &mut registry, RollbackKind::MountAdded { id: &id, dir: &local_dir });
-                bail!("connect failed: could not restore into {}", local_dir.display());
+                rollback(
+                    &paths,
+                    &mut registry,
+                    RollbackKind::MountAdded {
+                        id: &id,
+                        dir: &local_dir,
+                    },
+                );
+                bail!(
+                    "connect failed: could not restore into {}",
+                    local_dir.display()
+                );
             }
 
             println!(
@@ -371,7 +388,8 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
             // the push-single-mount invariant is preserved, which this achieves.
             bail!(
                 "link {} already exists as {:?}-mode; multi-mount is pull-only",
-                existing.name, existing.mode
+                existing.name,
+                existing.mode
             );
         }
         None => {
@@ -528,7 +546,11 @@ fn cmd_disconnect(name: String, force: bool) -> Result<()> {
             "Link {} has {} mounts:\n  - {}\nDisconnect all? [y/N]",
             link.name,
             link.local_dirs.len(),
-            link.local_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("\n  - ")
+            link.local_dirs
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n  - ")
         );
         let confirmed = dialoguer::Confirm::new()
             .with_prompt(prompt)

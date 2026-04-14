@@ -113,9 +113,13 @@ fn add_mount_rejects_push_link() {
     let link = make_push_link("repo", "dotfiles", "/tmp/a");
     reg.add(link.clone()).unwrap();
 
-    let err = reg.add_mount(&link.id, PathBuf::from("/tmp/b")).unwrap_err();
-    assert!(matches!(err, SyncorError::MultiMountNotAllowed(_)),
-        "expected MultiMountNotAllowed, got {err:?}");
+    let err = reg
+        .add_mount(&link.id, PathBuf::from("/tmp/b"))
+        .unwrap_err();
+    assert!(
+        matches!(err, SyncorError::MultiMountNotAllowed(_)),
+        "expected MultiMountNotAllowed, got {err:?}"
+    );
 }
 
 #[test]
@@ -126,7 +130,9 @@ fn add_mount_rejects_dir_owned_by_other_link() {
     reg.add(a.clone()).unwrap();
     reg.add(b.clone()).unwrap();
 
-    let err = reg.add_mount(&b.id, PathBuf::from("/tmp/shared")).unwrap_err();
+    let err = reg
+        .add_mount(&b.id, PathBuf::from("/tmp/shared"))
+        .unwrap_err();
     assert!(matches!(err, SyncorError::LinkAlreadyExists(_)));
 }
 
@@ -147,7 +153,9 @@ fn remove_mount_non_last_keeps_link() {
     reg.add(link.clone()).unwrap();
     reg.add_mount(&link.id, PathBuf::from("/tmp/b")).unwrap();
 
-    let r = reg.remove_mount(&link.id, &PathBuf::from("/tmp/a")).unwrap();
+    let r = reg
+        .remove_mount(&link.id, &PathBuf::from("/tmp/a"))
+        .unwrap();
     assert!(!r.last_mount_removed);
     let got = reg.get_by_id(&link.id).unwrap();
     assert_eq!(got.local_dirs, vec![PathBuf::from("/tmp/b")]);
@@ -159,7 +167,9 @@ fn remove_mount_last_reports_last_mount_removed() {
     let link = make_pull_link("repo", "x", "/tmp/a");
     reg.add(link.clone()).unwrap();
 
-    let r = reg.remove_mount(&link.id, &PathBuf::from("/tmp/a")).unwrap();
+    let r = reg
+        .remove_mount(&link.id, &PathBuf::from("/tmp/a"))
+        .unwrap();
     assert!(r.last_mount_removed);
     // Link is still present in registry; caller decides whether to remove().
     assert!(reg.get_by_id(&link.id).is_some());
@@ -172,7 +182,9 @@ fn remove_mount_unknown_dir_returns_link_not_found() {
     let link = make_pull_link("repo", "x", "/tmp/a");
     reg.add(link.clone()).unwrap();
 
-    let err = reg.remove_mount(&link.id, &PathBuf::from("/tmp/nope")).unwrap_err();
+    let err = reg
+        .remove_mount(&link.id, &PathBuf::from("/tmp/nope"))
+        .unwrap_err();
     assert!(matches!(err, SyncorError::LinkNotFound(_)));
 }
 
@@ -180,14 +192,18 @@ fn remove_mount_unknown_dir_returns_link_not_found() {
 fn registry_loads_legacy_local_dir_single_value() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("links.toml");
-    std::fs::write(&path, r#"
+    std::fs::write(
+        &path,
+        r#"
 [[links]]
 id = "abc123"
 name = "dotfiles"
 repo = "git@example.com:me/repo.git"
 local_dir = "/home/me/dotfiles"
 mode = "pull"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let reg = LinksRegistry::load(&path).unwrap();
     let link = reg
@@ -200,28 +216,39 @@ mode = "pull"
 fn registry_save_rewrites_legacy_to_local_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("links.toml");
-    std::fs::write(&path, r#"
+    std::fs::write(
+        &path,
+        r#"
 [[links]]
 id = "abc123"
 name = "dotfiles"
 repo = "git@example.com:me/repo.git"
 local_dir = "/home/me/dotfiles"
 mode = "pull"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let reg = LinksRegistry::load(&path).unwrap();
     reg.save(&path).unwrap();
     let contents = std::fs::read_to_string(&path).unwrap();
-    assert!(contents.contains("local_dirs"), "save should emit local_dirs; got:\n{contents}");
-    assert!(!contents.contains("local_dir ="),
-        "legacy scalar key should be gone after save; got:\n{contents}");
+    assert!(
+        contents.contains("local_dirs"),
+        "save should emit local_dirs; got:\n{contents}"
+    );
+    assert!(
+        !contents.contains("local_dir ="),
+        "legacy scalar key should be gone after save; got:\n{contents}"
+    );
 }
 
 #[test]
 fn registry_rejects_entry_with_both_local_dir_and_local_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("links.toml");
-    std::fs::write(&path, r#"
+    std::fs::write(
+        &path,
+        r#"
 [[links]]
 id = "abc123"
 name = "dotfiles"
@@ -229,7 +256,9 @@ repo = "git@example.com:me/repo.git"
 local_dir = "/home/me/dotfiles"
 local_dirs = ["/home/me/other"]
 mode = "pull"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let err = LinksRegistry::load(&path).unwrap_err();
     assert!(matches!(err, SyncorError::Config(_)));

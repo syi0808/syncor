@@ -145,11 +145,19 @@ fn multi_mount_pull_mirrors_identical_content() {
 
     // Sanity: the nested file made it through (exercising create_dir_all).
     assert!(
-        b1.path().join("agents").join("tools").join("helper.md").exists(),
+        b1.path()
+            .join("agents")
+            .join("tools")
+            .join("helper.md")
+            .exists(),
         "nested file should exist in b1"
     );
     assert!(
-        b2.path().join("agents").join("tools").join("helper.md").exists(),
+        b2.path()
+            .join("agents")
+            .join("tools")
+            .join("helper.md")
+            .exists(),
         "nested file should exist in b2"
     );
 }
@@ -256,10 +264,7 @@ fn failed_add_mount_preserves_existing_mount_and_state() {
     }
     impl Drop for PermGuard {
         fn drop(&mut self) {
-            let _ = std::fs::set_permissions(
-                &self.path,
-                std::fs::Permissions::from_mode(0o755),
-            );
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o755));
         }
     }
 
@@ -349,11 +354,7 @@ fn failed_add_mount_preserves_existing_mount_and_state() {
     let _perm_guard = PermGuard {
         path: readonly_parent.clone(),
     };
-    std::fs::set_permissions(
-        &readonly_parent,
-        std::fs::Permissions::from_mode(0o555),
-    )
-    .unwrap();
+    std::fs::set_permissions(&readonly_parent, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     // --- Simulate cmd_connect's add-mount branch. ---
     // 1. Register the new mount.

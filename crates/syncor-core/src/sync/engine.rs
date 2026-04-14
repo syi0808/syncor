@@ -457,8 +457,7 @@ impl SyncEngine {
                 // Apply non-conflicting actions
                 let pack_set =
                     chkpt_core::store::pack::PackSet::open_all(&store_dir.join("packs"))?;
-                let mut per_mount: Vec<MountOutcome> =
-                    Vec::with_capacity(link.local_dirs.len());
+                let mut per_mount: Vec<MountOutcome> = Vec::with_capacity(link.local_dirs.len());
 
                 for mount in &link.local_dirs {
                     let mut files_restored = 0usize;
