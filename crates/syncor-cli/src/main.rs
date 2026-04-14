@@ -474,25 +474,42 @@ fn cmd_unlink(dir: PathBuf) -> Result<()> {
     let mut registry = load_registry(&paths)?;
     let link = find_link_by_dir(&registry, &dir)?.clone();
 
-    registry.remove(&link.id).context("failed to remove link")?;
+    let canonical = std::fs::canonicalize(&dir)
+        .with_context(|| format!("cannot resolve path: {}", dir.display()))?;
+
+    let result = registry
+        .remove_mount(&link.id, &canonical)
+        .context("failed to remove mount")?;
     save_registry(&paths, &registry)?;
 
-    // Clean up on-disk state for the removed link.
-    if let Ok(db) = StateDb::open(paths.link_state_db()) {
-        let _ = db.delete_state(link.id.as_str());
-    }
-    let repo_dir = paths.link_repo_dir(&link.id);
-    if repo_dir.exists() {
-        let _ = std::fs::remove_dir_all(&repo_dir);
-        println!("  Removed repo dir: {}", repo_dir.display());
-    }
-    let lock_file = paths.link_lock_file(&link.id);
-    if lock_file.exists() {
-        let _ = std::fs::remove_file(&lock_file);
-        println!("  Removed lock file: {}", lock_file.display());
+    if result.last_mount_removed {
+        // Final mount — clean up link-wide state as before.
+        let _ = registry.remove(&link.id);
+        save_registry(&paths, &registry)?;
+        if let Ok(db) = StateDb::open(paths.link_state_db()) {
+            let _ = db.delete_state(link.id.as_str());
+        }
+        let repo_dir = paths.link_repo_dir(&link.id);
+        if repo_dir.exists() {
+            let _ = std::fs::remove_dir_all(&repo_dir);
+            println!("  Removed repo dir: {}", repo_dir.display());
+        }
+        let lock_file = paths.link_lock_file(&link.id);
+        if lock_file.exists() {
+            let _ = std::fs::remove_file(&lock_file);
+            println!("  Removed lock file: {}", lock_file.display());
+        }
+        println!("Unlinked {} ({})", link.name, canonical.display());
+    } else {
+        let remaining = link.local_dirs.len().saturating_sub(1);
+        println!(
+            "Unmounted {} from link {} (still mounted at {} other dir(s))",
+            canonical.display(),
+            link.name,
+            remaining
+        );
     }
 
-    println!("Unlinked {} ({})", link.name, link.primary_dir().display());
     Ok(())
 }
 
