@@ -110,3 +110,97 @@ fn restore_latest_updates_file_index() {
         "index should contain data.txt"
     );
 }
+
+#[test]
+fn restore_latest_fans_out_to_all_mounts() {
+    // Machine A pushes; Machine B pulls into two mounts (b1, b2).
+    let (workspace_a, _remote, data_dir_a, link_a) = setup();
+    let b1 = TempDir::new().unwrap();
+    let b2 = TempDir::new().unwrap();
+    let data_dir_b = TempDir::new().unwrap();
+
+    fs::write(workspace_a.path().join("shared.txt"), "shared content").unwrap();
+    fs::write(workspace_a.path().join("other.txt"), "other content").unwrap();
+
+    let paths_a = SyncorPaths::with_home(data_dir_a.path());
+    let transport_a = GitTransport::new(paths_a.clone());
+    let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
+    engine_a.init_link(&link_a).unwrap();
+    engine_a.push(&link_a).unwrap();
+
+    let mut link_b = link_a.clone();
+    link_b.local_dirs = vec![b1.path().to_path_buf(), b2.path().to_path_buf()];
+    link_b.mode = LinkMode::Pull;
+
+    let paths_b = SyncorPaths::with_home(data_dir_b.path());
+    let transport_b = GitTransport::new(paths_b.clone());
+    let engine_b = SyncEngine::new(paths_b, Box::new(transport_b));
+    engine_b.init_link(&link_b).unwrap();
+
+    let result = engine_b.restore_latest(&link_b).unwrap();
+    assert!(result.restored);
+    assert!(result.files_restored > 0);
+    assert_eq!(result.per_mount.len(), 2);
+    for outcome in &result.per_mount {
+        assert!(outcome.error.is_none(), "mount error: {:?}", outcome.error);
+        assert!(outcome.files_restored > 0);
+    }
+
+    // Both mounts have identical content matching the push.
+    assert_eq!(
+        fs::read_to_string(b1.path().join("shared.txt")).unwrap(),
+        "shared content"
+    );
+    assert_eq!(
+        fs::read_to_string(b2.path().join("shared.txt")).unwrap(),
+        "shared content"
+    );
+    assert_eq!(
+        fs::read_to_string(b1.path().join("other.txt")).unwrap(),
+        "other content"
+    );
+    assert_eq!(
+        fs::read_to_string(b2.path().join("other.txt")).unwrap(),
+        "other content"
+    );
+}
+
+#[test]
+fn restore_latest_to_targets_single_dir() {
+    let (workspace_a, _remote, data_dir_a, link_a) = setup();
+    let b1 = TempDir::new().unwrap();
+    let b2 = TempDir::new().unwrap();
+    let data_dir_b = TempDir::new().unwrap();
+
+    fs::write(workspace_a.path().join("shared.txt"), "shared content").unwrap();
+
+    let paths_a = SyncorPaths::with_home(data_dir_a.path());
+    let transport_a = GitTransport::new(paths_a.clone());
+    let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
+    engine_a.init_link(&link_a).unwrap();
+    engine_a.push(&link_a).unwrap();
+
+    let mut link_b = link_a.clone();
+    link_b.local_dirs = vec![b1.path().to_path_buf(), b2.path().to_path_buf()];
+    link_b.mode = LinkMode::Pull;
+
+    let paths_b = SyncorPaths::with_home(data_dir_b.path());
+    let transport_b = GitTransport::new(paths_b.clone());
+    let engine_b = SyncEngine::new(paths_b, Box::new(transport_b));
+    engine_b.init_link(&link_b).unwrap();
+
+    let outcome = engine_b.restore_latest_to(&link_b, b2.path()).unwrap();
+    assert_eq!(outcome.dir, b2.path().to_path_buf());
+    assert!(outcome.error.is_none());
+    assert!(outcome.files_restored > 0);
+
+    // b2 populated; b1 is untouched.
+    assert_eq!(
+        fs::read_to_string(b2.path().join("shared.txt")).unwrap(),
+        "shared content"
+    );
+    assert!(
+        fs::read_dir(b1.path()).unwrap().next().is_none(),
+        "b1 should still be empty"
+    );
+}

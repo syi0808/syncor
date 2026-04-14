@@ -66,9 +66,17 @@ pub struct PushSyncResult {
 }
 
 #[derive(Debug)]
+pub struct MountOutcome {
+    pub dir: PathBuf,
+    pub files_restored: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct PullSyncResult {
     pub restored: bool,
     pub files_restored: usize,
+    pub per_mount: Vec<MountOutcome>,
 }
 
 impl SyncEngine {
@@ -172,6 +180,43 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Restore the latest snapshot into a single target directory.
+    /// Does not update the link-scoped file index or sync state — that is the
+    /// caller's responsibility (see `restore_latest`).
+    pub fn restore_latest_to(&self, link: &LinkInfo, target: &Path) -> Result<MountOutcome> {
+        let store_dir = self.store_dir(link);
+        let catalog_path = store_dir.join("catalog.sqlite");
+
+        if !catalog_path.exists() {
+            return Ok(MountOutcome {
+                dir: target.to_path_buf(),
+                files_restored: 0,
+                error: None,
+            });
+        }
+
+        let catalog = MetadataCatalog::open(&catalog_path)?;
+        let latest = match catalog.latest_snapshot()? {
+            Some(s) => s,
+            None => {
+                return Ok(MountOutcome {
+                    dir: target.to_path_buf(),
+                    files_restored: 0,
+                    error: None,
+                })
+            }
+        };
+
+        use crate::sync::restore::RestorePipeline;
+        let result = RestorePipeline::run(&latest.id, &store_dir, target)?;
+
+        Ok(MountOutcome {
+            dir: target.to_path_buf(),
+            files_restored: result.files_restored,
+            error: None,
+        })
+    }
+
     /// Restore the latest snapshot to the local directory.
     /// Used for initial connect when the repo already has data.
     pub fn restore_latest(&self, link: &LinkInfo) -> Result<PullSyncResult> {
@@ -182,6 +227,7 @@ impl SyncEngine {
             return Ok(PullSyncResult {
                 restored: false,
                 files_restored: 0,
+                per_mount: vec![],
             });
         }
 
@@ -192,14 +238,25 @@ impl SyncEngine {
                 return Ok(PullSyncResult {
                     restored: false,
                     files_restored: 0,
+                    per_mount: vec![],
                 })
             }
         };
 
-        use crate::sync::restore::RestorePipeline;
-        // TODO(multi-mount): will fan out in Task 6/8
-        let result = RestorePipeline::run(&latest.id, &store_dir, link.primary_dir())?;
+        let mut per_mount = Vec::with_capacity(link.local_dirs.len());
+        for dir in &link.local_dirs {
+            match self.restore_latest_to(link, dir) {
+                Ok(outcome) => per_mount.push(outcome),
+                Err(e) => per_mount.push(MountOutcome {
+                    dir: dir.clone(),
+                    files_restored: 0,
+                    error: Some(e.to_string()),
+                }),
+            }
+        }
 
+        // Link-scoped bookkeeping happens once, using the primary mount as
+        // representative for the file index (pull-mode mounts are mirrors).
         self.update_file_index(link, &store_dir)?;
 
         let db = self.state_db()?;
@@ -212,9 +269,18 @@ impl SyncEngine {
         };
         db.upsert_sync_state(&state)?;
 
+        let files_restored: usize = per_mount
+            .iter()
+            .filter(|m| m.error.is_none())
+            .map(|m| m.files_restored)
+            .sum();
+        let restored = per_mount
+            .iter()
+            .any(|m| m.error.is_none() && m.files_restored > 0);
         Ok(PullSyncResult {
-            restored: true,
-            files_restored: result.files_restored,
+            restored,
+            files_restored,
+            per_mount,
         })
     }
 
@@ -277,6 +343,7 @@ impl SyncEngine {
             PullResult::UpToDate => Ok(PullSyncResult {
                 restored: false,
                 files_restored: 0,
+                per_mount: vec![],
             }),
             PullResult::Conflict { details } => Err(SyncorError::Conflict(details.message)),
             PullResult::Success { revision } => {
@@ -435,6 +502,7 @@ impl SyncEngine {
                 Ok(PullSyncResult {
                     restored: true,
                     files_restored,
+                    per_mount: vec![],
                 })
             }
         }
