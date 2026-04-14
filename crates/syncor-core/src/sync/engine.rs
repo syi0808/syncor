@@ -216,8 +216,11 @@ impl SyncEngine {
         })
     }
 
-    /// Restore the latest snapshot to the local directory.
-    /// Used for initial connect when the repo already has data.
+    /// Restore the latest snapshot into every mount directory.
+    ///
+    /// State-based semantics: the result's `restored == true` requires at least
+    /// one mount to materialize at least one file. A snapshot with no files
+    /// yields `restored: false`. See `pull` for change-based semantics.
     pub fn restore_latest(&self, link: &LinkInfo) -> Result<PullSyncResult> {
         let store_dir = self.store_dir(link);
         let catalog_path = store_dir.join("catalog.sqlite");
@@ -334,6 +337,12 @@ impl SyncEngine {
         }
     }
 
+    /// Pull remote changes and apply them to every mount directory.
+    ///
+    /// Change-based semantics: the result's `restored == true` requires at least
+    /// one mount to successfully reach the end of its action loop, even if that
+    /// loop contained only deletes (`files_restored == 0`). See `restore_latest`
+    /// for state-based semantics.
     pub fn pull(&self, link: &LinkInfo) -> Result<PullSyncResult> {
         let _lock = LinkLock::acquire(&self.paths, link)?;
 
@@ -519,10 +528,8 @@ impl SyncEngine {
                     .filter(|m| m.error.is_none())
                     .map(|m| m.files_restored)
                     .sum();
-                // A pull is "restored" if it succeeded at the catalog level and at least
-                // one mount applied its actions without error. This preserves the
-                // historical semantic where a delete-only pull (files_restored == 0)
-                // still reports restored == true.
+                // Asymmetric with `restore_latest`: a delete-only pull (files_restored == 0)
+                // is still "restored" because deletes are real work applied to the mount.
                 let restored = per_mount.iter().any(|m| m.error.is_none());
 
                 self.update_file_index(link, &store_dir)?;
