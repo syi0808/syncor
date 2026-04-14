@@ -342,14 +342,6 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
                 );
                 return Ok(());
             }
-            if let Some(other) = registry.get_by_dir(&local_dir) {
-                bail!(
-                    "directory {} is already managed by link {}",
-                    local_dir.display(),
-                    other.name
-                );
-            }
-
             registry
                 .add_mount(&id, local_dir.clone())
                 .context("failed to register mount")?;
