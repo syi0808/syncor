@@ -452,19 +452,17 @@ fn cmd_status(dir: Option<PathBuf>) -> Result<()> {
             .and_then(|s| s.last_sync_at.as_deref())
             .unwrap_or("never");
 
-        println!(
-            "  {} [{}] ({})",
-            link.name,
-            mode_str,
-            link.primary_dir().display()
-        );
+        println!("  {} [{}]", link.name, mode_str);
         println!("    repo: {}", link.repo);
         println!("    last sync: {}", last_sync);
+        println!("    mounts:");
+        for dir in &link.local_dirs {
+            println!("      - {}", dir.display());
+        }
         if has_conflicts {
-            println!(
-                "    !! CONFLICTS — run 'syncor resolve {}'",
-                link.primary_dir().display()
-            );
+            for dir in &link.local_dirs {
+                println!("    !! CONFLICTS — run 'syncor resolve {}'", dir.display());
+            }
         }
         println!();
     }
