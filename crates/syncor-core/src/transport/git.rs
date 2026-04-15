@@ -4,6 +4,7 @@ use std::process::Command;
 use crate::config::SyncorPaths;
 use crate::error::{Result, SyncorError};
 use crate::link::LinkInfo;
+use crate::progress::ProgressReporter;
 use crate::transport::{ConflictInfo, PullResult, PushResult, RemoteLinkInfo, SyncTransport};
 
 /// Retry a closure up to `max_attempts` times with exponential backoff.
@@ -114,7 +115,7 @@ impl GitTransport {
 }
 
 impl SyncTransport for GitTransport {
-    fn init_remote(&self, link: &LinkInfo) -> Result<()> {
+    fn init_remote(&self, link: &LinkInfo, _reporter: &dyn ProgressReporter) -> Result<()> {
         let repo_dir = self.repo_dir(link);
 
         if repo_dir.join(".git").exists() {
@@ -164,7 +165,12 @@ impl SyncTransport for GitTransport {
         Ok(())
     }
 
-    fn push(&self, link: &LinkInfo, _store_path: &Path) -> Result<PushResult> {
+    fn push(
+        &self,
+        link: &LinkInfo,
+        _store_path: &Path,
+        _reporter: &dyn ProgressReporter,
+    ) -> Result<PushResult> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
@@ -215,7 +221,12 @@ impl SyncTransport for GitTransport {
         })
     }
 
-    fn pull(&self, link: &LinkInfo, _store_path: &Path) -> Result<PullResult> {
+    fn pull(
+        &self,
+        link: &LinkInfo,
+        _store_path: &Path,
+        _reporter: &dyn ProgressReporter,
+    ) -> Result<PullResult> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
@@ -273,7 +284,11 @@ impl SyncTransport for GitTransport {
         }
     }
 
-    fn list_remote_links(&self, repo_url: &str) -> Result<Vec<RemoteLinkInfo>> {
+    fn list_remote_links(
+        &self,
+        repo_url: &str,
+        _reporter: &dyn ProgressReporter,
+    ) -> Result<Vec<RemoteLinkInfo>> {
         let tmp = tempfile::tempdir()?;
 
         let clone_output = Command::new("git")
@@ -319,7 +334,11 @@ impl SyncTransport for GitTransport {
             .collect())
     }
 
-    fn has_remote_changes(&self, link: &LinkInfo) -> Result<bool> {
+    fn has_remote_changes(
+        &self,
+        link: &LinkInfo,
+        _reporter: &dyn ProgressReporter,
+    ) -> Result<bool> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
