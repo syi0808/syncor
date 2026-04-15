@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::progress::{ItemTotal, Phase, PhaseGuard, ProgressReporter};
 use chkpt_core::index::{FileEntry, FileIndex};
 use chkpt_core::scanner::scan_workspace;
 use chkpt_core::store::blob::{bytes_to_hex, hash_content_bytes};
@@ -20,7 +21,12 @@ pub struct SaveResult {
 pub struct SavePipeline;
 
 impl SavePipeline {
-    pub fn run(workspace: &Path, store_dir: &Path, _message: Option<&str>) -> Result<SaveResult> {
+    pub fn run(
+        workspace: &Path,
+        store_dir: &Path,
+        _message: Option<&str>,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<SaveResult> {
         // 1. Ensure store directories exist
         let packs_dir = store_dir.join("packs");
         let trees_dir = store_dir.join("trees");
@@ -30,13 +36,16 @@ impl SavePipeline {
         std::fs::create_dir_all(&trees_dir)?;
 
         // 2. Scan workspace
+        let scan_guard = PhaseGuard::new(reporter, Phase::Scan, ItemTotal::Unknown);
         let scanned = scan_workspace(workspace, None)?;
         let files_scanned = scanned.len();
+        scan_guard.end();
 
         // 3. Load file index for incremental detection
         let mut index = FileIndex::open(&index_path)?;
 
         // 4. Find changed files (compare against index by size + mtime)
+        let detect_guard = PhaseGuard::new(reporter, Phase::DetectChanges, ItemTotal::Unknown);
         let mut changed_files = Vec::new();
         for sf in &scanned {
             if let Ok(Some(entry)) = index.get(&sf.relative_path) {
@@ -59,9 +68,13 @@ impl SavePipeline {
             .into_iter()
             .filter(|p| !scanned_paths.contains(p.as_str()))
             .collect();
+        detect_guard.end();
 
-        // If nothing changed and nothing removed, skip snapshot creation
+        // If nothing changed and nothing removed, skip snapshot creation.
+        // Still emit a Hash phase start/end so consumers see a consistent
+        // phase stream for every save run.
         if files_hashed == 0 && removed_paths.is_empty() {
+            PhaseGuard::new(reporter, Phase::Hash, ItemTotal::Unknown).end();
             let catalog = MetadataCatalog::open(&catalog_path)?;
             let latest = catalog.latest_snapshot()?;
             return Ok(SaveResult {
@@ -73,6 +86,7 @@ impl SavePipeline {
         }
 
         // 5. Hash, compress, and pack changed files
+        let hash_guard = PhaseGuard::new(reporter, Phase::Hash, ItemTotal::Unknown);
         let mut pack_writer = PackWriter::new(&packs_dir)?;
         let mut blob_locations: Vec<([u8; 16], BlobLocation)> = Vec::new();
         let mut new_entries: Vec<FileEntry> = Vec::new();
@@ -117,8 +131,10 @@ impl SavePipeline {
                 mode: sf.mode,
             });
         }
+        hash_guard.end();
 
         // 6. Finish pack — chunk at 50 MB to stay under GitHub's 100 MB file limit
+        let pack_finish_guard = PhaseGuard::new(reporter, Phase::PackFinish, ItemTotal::Unknown);
         let pack_hash = if !pack_writer.is_empty() {
             Some(pack_writer.finish_with_options(PackFinishOptions {
                 chunk_bytes: Some(50_000_000),
@@ -127,6 +143,7 @@ impl SavePipeline {
             drop(pack_writer);
             None
         };
+        pack_finish_guard.end();
 
         // 7. Set pack_hash on blob locations
         if let Some(ref ph) = pack_hash {
@@ -160,6 +177,7 @@ impl SavePipeline {
         manifest.sort_by(|a, b| a.path.cmp(&b.path));
 
         // 9. Open catalog and insert snapshot
+        let catalog_guard = PhaseGuard::new(reporter, Phase::Catalog, ItemTotal::Unknown);
         let catalog = MetadataCatalog::open(&catalog_path)?;
         let parent = catalog.latest_snapshot()?;
 
@@ -185,6 +203,7 @@ impl SavePipeline {
 
         // 10. Update file index
         index.apply_changes(&removed_paths, &new_entries)?;
+        catalog_guard.end();
 
         Ok(SaveResult {
             snapshot_id,
