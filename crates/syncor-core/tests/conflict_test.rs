@@ -1,8 +1,5 @@
 // crates/syncor-core/tests/conflict_test.rs
-use syncor_core::sync::conflict::{
-    detect_conflicts, Conflict, ConflictResolver, FileAction, KeepLocalResolver, ManifestMap,
-    Resolution,
-};
+use syncor_core::sync::conflict::{detect_conflicts, FileAction, ManifestMap};
 
 fn map(entries: &[(&str, [u8; 16])]) -> ManifestMap {
     entries.iter().map(|(p, h)| (p.to_string(), *h)).collect()

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 use syncor_core::daemon::server::{IpcClient, IpcRequest, IpcResponse, IpcServer};
-use syncor_core::watch::poller::{PollEvent, Poller};
+use syncor_core::watch::poller::Poller;
 use syncor_core::watch::watcher::DebouncedWatcher;
 use tempfile::TempDir;
 use tokio::sync::mpsc;

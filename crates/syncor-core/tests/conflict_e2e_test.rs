@@ -20,6 +20,7 @@ use tempfile::TempDir;
 
 struct Machine {
     workspace: TempDir,
+    #[allow(dead_code)] // holds temp dir alive for duration of the test
     data: TempDir,
     link: LinkInfo,
     paths: SyncorPaths,
@@ -190,7 +191,7 @@ fn keep_local_change_when_remote_unchanged() {
 
     // B modifies locally, then pulls
     b.write("data.txt", "local-edit");
-    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
+    let _result = b.engine().pull(&b.link, &NullReporter).unwrap();
 
     // No remote file changes → nothing to apply
     // B's local change should be preserved
