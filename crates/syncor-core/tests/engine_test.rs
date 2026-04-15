@@ -1,6 +1,7 @@
 use std::fs;
 use syncor_core::config::SyncorPaths;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::transport::git::GitTransport;
 use tempfile::TempDir;
@@ -32,7 +33,7 @@ fn push_syncs_new_files() {
     let engine = SyncEngine::new(paths, Box::new(transport));
 
     engine.init_link(&link).unwrap();
-    let result = engine.push(&link).unwrap();
+    let result = engine.push(&link, &NullReporter).unwrap();
     assert!(result.snapshot_id.is_some());
 }
 
@@ -49,7 +50,7 @@ fn pull_restores_remote_files() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    engine_a.push(&link_a).unwrap();
+    engine_a.push(&link_a, &NullReporter).unwrap();
 
     let mut link_b = link_a.clone();
     link_b.local_dirs = vec![workspace_b.path().to_path_buf()];
@@ -81,7 +82,7 @@ fn restore_latest_updates_file_index() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    engine_a.push(&link_a).unwrap();
+    engine_a.push(&link_a, &NullReporter).unwrap();
 
     let mut link_b = link_a.clone();
     link_b.local_dirs = vec![workspace_b.path().to_path_buf()];
@@ -126,7 +127,7 @@ fn restore_latest_fans_out_to_all_mounts() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    engine_a.push(&link_a).unwrap();
+    engine_a.push(&link_a, &NullReporter).unwrap();
 
     let mut link_b = link_a.clone();
     link_b.local_dirs = vec![b1.path().to_path_buf(), b2.path().to_path_buf()];
@@ -178,7 +179,7 @@ fn restore_latest_to_targets_single_dir() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    engine_a.push(&link_a).unwrap();
+    engine_a.push(&link_a, &NullReporter).unwrap();
 
     let mut link_b = link_a.clone();
     link_b.local_dirs = vec![b1.path().to_path_buf(), b2.path().to_path_buf()];

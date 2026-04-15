@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use syncor_core::config::{LinksRegistry, SyncorConfig, SyncorPaths};
 use syncor_core::daemon::manager::DaemonManager;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
@@ -252,7 +253,7 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     println!("Linked {} -> {}", canonical.display(), repo_url);
     println!("Performing initial push...");
 
-    match engine.push(&info) {
+    match engine.push(&info, &NullReporter) {
         Ok(result) => {
             if result.pushed {
                 println!(
@@ -280,7 +281,7 @@ fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> R
 
     let transport = GitTransport::new(paths.clone());
     let remote_links = transport
-        .list_remote_links(&repo)
+        .list_remote_links(&repo, &NullReporter)
         .context("failed to list remote links")?;
 
     if remote_links.is_empty() {
@@ -812,7 +813,7 @@ fn cmd_push(dir: Option<PathBuf>) -> Result<()> {
 
     for link in &links {
         print!("Pushing {}... ", link.name);
-        match engine.push(link) {
+        match engine.push(link, &NullReporter) {
             Ok(result) => {
                 if result.pushed {
                     println!(
@@ -851,7 +852,7 @@ fn cmd_pull(dir: Option<PathBuf>) -> Result<()> {
 
     for link in &links {
         print!("Pulling {}... ", link.name);
-        match engine.pull(link) {
+        match engine.pull(link, &NullReporter) {
             Ok(result) => {
                 if result.restored {
                     println!("done ({} files restored).", result.files_restored);

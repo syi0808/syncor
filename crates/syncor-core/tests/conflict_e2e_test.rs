@@ -7,6 +7,7 @@
 use std::fs;
 use syncor_core::config::SyncorPaths;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
@@ -90,7 +91,7 @@ fn two_machines(link_name: &str) -> (TempDir, Machine, Machine) {
 fn bootstrap(a: &Machine, b: &Machine) {
     let ea = a.engine();
     ea.init_link(&a.link).unwrap();
-    ea.push(&a.link).unwrap();
+    ea.push(&a.link, &NullReporter).unwrap();
 
     let eb = b.engine();
     eb.init_link(&b.link).unwrap();
@@ -113,11 +114,11 @@ fn conflict_both_modify_same_file() {
 
     // A modifies and pushes
     a.write("config.yaml", "key: from-machine-a");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B modifies locally (different content) then pulls
     b.write("config.yaml", "key: from-machine-b");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     // Should fail with conflict
     assert!(result.is_err(), "pull should return conflict error");
@@ -151,10 +152,10 @@ fn merge_non_overlapping_changes() {
 
     // A modifies file1 and pushes
     a.write("file1.txt", "modified-by-a");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B has not changed anything locally → pull should auto-apply
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(result.restored);
     assert_eq!(b.read("file1.txt"), "modified-by-a");
     assert_eq!(b.read("file2.txt"), "original2");
@@ -169,9 +170,9 @@ fn auto_apply_remote_change() {
     bootstrap(&a, &b);
 
     a.write("data.txt", "v2");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(result.restored);
     assert_eq!(b.read("data.txt"), "v2");
 }
@@ -185,11 +186,11 @@ fn keep_local_change_when_remote_unchanged() {
     bootstrap(&a, &b);
 
     // A pushes with NO changes (just to have a remote revision)
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B modifies locally, then pulls
     b.write("data.txt", "local-edit");
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
 
     // No remote file changes → nothing to apply
     // B's local change should be preserved
@@ -206,11 +207,11 @@ fn conflict_both_add_same_new_file() {
 
     // A adds new.txt and pushes
     a.write("new.txt", "from-a");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B also adds new.txt locally with different content
     b.write("new.txt", "from-b");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     assert!(result.is_err());
     let db = b.state_db();
@@ -234,11 +235,11 @@ fn conflict_remote_delete_local_modify() {
 
     // A deletes and pushes
     a.delete("important.txt");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B modifies the same file
     b.write("important.txt", "b-edited");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     assert!(result.is_err());
     let db = b.state_db();
@@ -262,11 +263,11 @@ fn conflict_remote_modify_local_delete() {
 
     // A modifies and pushes
     a.write("shared.txt", "a-modified");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B deletes locally
     b.delete("shared.txt");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     assert!(result.is_err());
     let db = b.state_db();
@@ -287,10 +288,10 @@ fn no_conflict_when_both_change_to_same() {
 
     // Both change to identical content
     a.write("data.txt", "converged");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     b.write("data.txt", "converged");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     // Should NOT conflict
     assert!(result.is_ok(), "identical changes should not conflict");
@@ -307,9 +308,9 @@ fn auto_apply_remote_add() {
 
     // A adds a new file
     a.write("extra.txt", "new content");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(result.restored);
     assert!(b.exists("extra.txt"));
     assert_eq!(b.read("extra.txt"), "new content");
@@ -327,9 +328,9 @@ fn auto_apply_remote_delete() {
 
     // A deletes file2
     a.delete("file2.txt");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(result.restored);
     assert!(b.exists("file1.txt"));
     assert!(!b.exists("file2.txt"), "deleted file should be removed");
@@ -344,10 +345,10 @@ fn no_conflict_both_delete() {
     bootstrap(&a, &b);
 
     a.delete("temp.txt");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     b.delete("temp.txt");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     assert!(result.is_ok(), "both deleting should not conflict");
     assert!(!b.exists("temp.txt"));
@@ -367,9 +368,9 @@ fn conflict_resolution_unblocks_sync() {
 
     // Create conflict
     a.write("config.txt", "from-a");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
     b.write("config.txt", "from-b");
-    let _ = b.engine().pull(&b.link); // conflict
+    let _ = b.engine().pull(&b.link, &NullReporter); // conflict
 
     // Verify sync is blocked (has conflicts)
     let db = b.state_db();
@@ -383,7 +384,7 @@ fn conflict_resolution_unblocks_sync() {
 
     // Now A pushes another change
     a.write("config.txt", "from-a-v2");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B should be able to pull again
     // But first B needs to push its resolved state so the base snapshot is updated
@@ -411,12 +412,12 @@ fn complex_non_conflicting_merge() {
     a.write("f1.txt", "a-modified-f1");
     a.write("f3.txt", "new-file-from-a");
     a.delete("f4.txt");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B: only modified f2 locally (no overlap with A's changes)
     b.write("f2.txt", "b-modified-f2");
 
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
     assert!(
         result.is_ok(),
         "non-overlapping changes should merge cleanly"
@@ -447,13 +448,13 @@ fn multiple_conflicts_at_once() {
     a.write("a.txt", "a-v2");
     a.write("b.txt", "b-v2");
     a.write("c.txt", "c-v2");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B also modifies all three differently
     b.write("a.txt", "a-local");
     b.write("b.txt", "b-local");
     b.write("c.txt", "c-local");
-    let result = b.engine().pull(&b.link);
+    let result = b.engine().pull(&b.link, &NullReporter);
 
     assert!(result.is_err());
     let db = b.state_db();
@@ -482,21 +483,21 @@ fn sequential_sync_rounds() {
 
     // Round 2: A modifies, pushes, B pulls
     a.write("file.txt", "round2");
-    a.engine().push(&a.link).unwrap();
-    b.engine().pull(&b.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
+    b.engine().pull(&b.link, &NullReporter).unwrap();
     assert_eq!(b.read("file.txt"), "round2");
 
     // Round 3: A adds file, pushes, B pulls
     a.write("new.txt", "round3");
-    a.engine().push(&a.link).unwrap();
-    b.engine().pull(&b.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
+    b.engine().pull(&b.link, &NullReporter).unwrap();
     assert_eq!(b.read("new.txt"), "round3");
     assert_eq!(b.read("file.txt"), "round2"); // unchanged
 
     // Round 4: A deletes, pushes, B pulls
     a.delete("file.txt");
-    a.engine().push(&a.link).unwrap();
-    b.engine().pull(&b.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
+    b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(!b.exists("file.txt"));
     assert_eq!(b.read("new.txt"), "round3"); // still there
 }
@@ -518,15 +519,15 @@ fn bidirectional_sync_rounds() {
     // Round 2: B modifies file1, adds file2, pushes; A pulls and verifies
     b.write("file1.txt", "from-b-v1");
     b.write("file2.txt", "new-from-b");
-    b.engine().push(&b.link).unwrap();
-    a.engine().pull(&a.link).unwrap();
+    b.engine().push(&b.link, &NullReporter).unwrap();
+    a.engine().pull(&a.link, &NullReporter).unwrap();
     assert_eq!(a.read("file1.txt"), "from-b-v1");
     assert_eq!(a.read("file2.txt"), "new-from-b");
 
     // Round 3: A modifies file2, pushes; B pulls and verifies
     a.write("file2.txt", "modified-by-a");
-    a.engine().push(&a.link).unwrap();
-    b.engine().pull(&b.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
+    b.engine().pull(&b.link, &NullReporter).unwrap();
     assert_eq!(b.read("file2.txt"), "modified-by-a");
     assert_eq!(b.read("file1.txt"), "from-b-v1"); // unchanged
 }
@@ -545,11 +546,11 @@ fn concurrent_push_detects_conflict() {
 
     // A modifies and pushes
     a.write("shared.txt", "from-a");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B modifies and pushes WITHOUT pulling first → should conflict
     b.write("shared.txt", "from-b");
-    let result = b.engine().push(&b.link);
+    let result = b.engine().push(&b.link, &NullReporter);
 
     assert!(
         result.is_err(),
@@ -581,27 +582,33 @@ fn has_remote_changes_detects_new_push() {
     // B just synced — no remote changes
     let transport_b = GitTransport::new(b.paths.clone());
     assert!(
-        !transport_b.has_remote_changes(&b.link).unwrap(),
+        !transport_b
+            .has_remote_changes(&b.link, &NullReporter)
+            .unwrap(),
         "should be up-to-date right after bootstrap"
     );
 
     // A pushes new content
     a.write("data.txt", "v2");
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // B should detect remote changes
     assert!(
-        transport_b.has_remote_changes(&b.link).unwrap(),
+        transport_b
+            .has_remote_changes(&b.link, &NullReporter)
+            .unwrap(),
         "should detect A's push as remote change"
     );
 
     // B pulls
-    b.engine().pull(&b.link).unwrap();
+    b.engine().pull(&b.link, &NullReporter).unwrap();
     assert_eq!(b.read("data.txt"), "v2");
 
     // After pulling, no more remote changes
     assert!(
-        !transport_b.has_remote_changes(&b.link).unwrap(),
+        !transport_b
+            .has_remote_changes(&b.link, &NullReporter)
+            .unwrap(),
         "should be up-to-date after pull"
     );
 }
@@ -618,12 +625,14 @@ fn list_remote_links_discovers_links() {
     // A links and pushes (push creates syncor.toml via ensure_syncor_toml)
     a.write("file.txt", "content");
     a.engine().init_link(&a.link).unwrap();
-    a.engine().push(&a.link).unwrap();
+    a.engine().push(&a.link, &NullReporter).unwrap();
 
     // Use transport to list remote links from the bare repo URL
     let transport = GitTransport::new(a.paths.clone());
     let repo_url = remote.path().to_str().unwrap();
-    let links = transport.list_remote_links(repo_url).unwrap();
+    let links = transport
+        .list_remote_links(repo_url, &NullReporter)
+        .unwrap();
 
     assert!(
         !links.is_empty(),
@@ -650,7 +659,7 @@ fn pull_when_up_to_date_returns_no_change() {
     assert_eq!(b.read("file.txt"), "content");
 
     // B pulls again immediately — nothing has changed on remote
-    let result = b.engine().pull(&b.link).unwrap();
+    let result = b.engine().pull(&b.link, &NullReporter).unwrap();
     assert!(
         !result.restored,
         "second pull with no remote changes should return restored: false"

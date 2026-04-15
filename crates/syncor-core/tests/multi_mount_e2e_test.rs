@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 use syncor_core::config::{LinksRegistry, SyncorPaths};
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
@@ -80,7 +81,7 @@ fn multi_mount_pull_mirrors_identical_content() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    let push_result = engine_a.push(&link_a).unwrap();
+    let push_result = engine_a.push(&link_a, &NullReporter).unwrap();
     assert!(push_result.pushed, "Machine A push should succeed");
 
     // --- Machine B: same link id/repo/name, two local_dirs, Pull mode. ---
@@ -299,7 +300,7 @@ fn failed_add_mount_preserves_existing_mount_and_state() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    let push_result = engine_a.push(&link_a).unwrap();
+    let push_result = engine_a.push(&link_a, &NullReporter).unwrap();
     assert!(push_result.pushed, "Machine A push should succeed");
 
     // --- Machine B: initial connect with single mount b1 (succeeds). ---
