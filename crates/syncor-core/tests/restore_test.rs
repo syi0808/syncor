@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::restore::{validate_path, RestorePipeline};
 use syncor_core::sync::save::SavePipeline;
 use tempfile::TempDir;
@@ -11,13 +12,19 @@ fn restore_recreates_files_from_snapshot() {
 
     fs::write(workspace.path().join("a.txt"), "hello").unwrap();
     fs::write(workspace.path().join("b.txt"), "world").unwrap();
-    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let save_result =
+        SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
 
     fs::remove_file(workspace.path().join("a.txt")).unwrap();
     fs::remove_file(workspace.path().join("b.txt")).unwrap();
 
-    let result =
-        RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+    let result = RestorePipeline::run(
+        &save_result.snapshot_id,
+        store.path(),
+        workspace.path(),
+        &NullReporter,
+    )
+    .unwrap();
 
     assert_eq!(result.files_restored, 2);
     assert_eq!(
@@ -36,11 +43,18 @@ fn restore_removes_extra_files() {
     let store = TempDir::new().unwrap();
 
     fs::write(workspace.path().join("keep.txt"), "keep").unwrap();
-    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let save_result =
+        SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
 
     fs::write(workspace.path().join("extra.txt"), "extra").unwrap();
 
-    RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+    RestorePipeline::run(
+        &save_result.snapshot_id,
+        store.path(),
+        workspace.path(),
+        &NullReporter,
+    )
+    .unwrap();
 
     assert!(!workspace.path().join("extra.txt").exists());
     assert!(workspace.path().join("keep.txt").exists());
@@ -59,10 +73,17 @@ fn restore_preserves_file_permissions() {
     fs::write(&script_path, "#!/bin/bash\necho hi").unwrap();
     fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let save_result =
+        SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
 
     fs::remove_file(&script_path).unwrap();
-    RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+    RestorePipeline::run(
+        &save_result.snapshot_id,
+        store.path(),
+        workspace.path(),
+        &NullReporter,
+    )
+    .unwrap();
 
     let perms = fs::metadata(&script_path).unwrap().permissions();
     let mode = perms.mode() & 0o777;
@@ -100,11 +121,18 @@ fn restore_preserves_ignored_files() {
     fs::write(workspace.path().join(".env"), "SECRET=123").unwrap();
     fs::write(workspace.path().join(".chkptignore"), ".env\n").unwrap();
 
-    let save_result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let save_result =
+        SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
 
     // Add another tracked file, then restore
     fs::write(workspace.path().join("extra.txt"), "extra").unwrap();
-    RestorePipeline::run(&save_result.snapshot_id, store.path(), workspace.path()).unwrap();
+    RestorePipeline::run(
+        &save_result.snapshot_id,
+        store.path(),
+        workspace.path(),
+        &NullReporter,
+    )
+    .unwrap();
 
     // .env should still exist (it was ignored by scanner)
     assert!(
