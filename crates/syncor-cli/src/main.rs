@@ -12,6 +12,8 @@ use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
 use syncor_core::transport::SyncTransport;
 
+mod progress;
+
 // ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
