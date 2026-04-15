@@ -137,6 +137,8 @@ impl SyncEngine {
     }
 
     pub fn init_link(&self, link: &LinkInfo) -> Result<()> {
+        // TODO(progress-display): accept a reporter when cmd_link/cmd_connect
+        // thread one through. Today no CLI path exposes progress here.
         self.transport.init_remote(link, &NullReporter)?;
         let link_dir = self.paths.link_dir();
         std::fs::create_dir_all(&link_dir)?;
@@ -208,6 +210,8 @@ impl SyncEngine {
         };
 
         use crate::sync::restore::RestorePipeline;
+        // TODO(progress-display): accept a reporter when cmd_connect/cmd_pull
+        // thread one through; today this helper runs without progress feedback.
         let result = RestorePipeline::run(&latest.id, &store_dir, target, &NullReporter)?;
 
         Ok(MountOutcome {
