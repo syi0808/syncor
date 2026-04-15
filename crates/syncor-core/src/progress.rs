@@ -54,3 +54,58 @@ pub enum ItemTotal {
     Count(u64),
     Bytes { items: u64, bytes: u64 },
 }
+
+pub trait ProgressReporter: Send + Sync {
+    fn phase_start(&self, phase: Phase, total: ItemTotal);
+    fn phase_tick(&self, items_delta: u64, bytes_delta: u64);
+    fn phase_end(&self, phase: Phase);
+    fn log(&self, msg: &str);
+}
+
+/// No-op reporter for tests and non-CLI consumers.
+pub struct NullReporter;
+
+impl ProgressReporter for NullReporter {
+    fn phase_start(&self, _: Phase, _: ItemTotal) {}
+    fn phase_tick(&self, _: u64, _: u64) {}
+    fn phase_end(&self, _: Phase) {}
+    fn log(&self, _: &str) {}
+}
+
+/// RAII guard that pairs `phase_start` with `phase_end`. On drop, emits
+/// `phase_end` if `.end()` was not called. Reporter implementations must
+/// tolerate a redundant `phase_end` call on an already-closed phase as a
+/// no-op.
+pub struct PhaseGuard<'a> {
+    reporter: &'a dyn ProgressReporter,
+    phase: Phase,
+    ended: bool,
+}
+
+impl<'a> PhaseGuard<'a> {
+    pub fn new(reporter: &'a dyn ProgressReporter, phase: Phase, total: ItemTotal) -> Self {
+        reporter.phase_start(phase, total);
+        Self {
+            reporter,
+            phase,
+            ended: false,
+        }
+    }
+
+    pub fn tick(&self, items: u64, bytes: u64) {
+        self.reporter.phase_tick(items, bytes);
+    }
+
+    pub fn end(mut self) {
+        self.reporter.phase_end(self.phase);
+        self.ended = true;
+    }
+}
+
+impl Drop for PhaseGuard<'_> {
+    fn drop(&mut self) {
+        if !self.ended {
+            self.reporter.phase_end(self.phase);
+        }
+    }
+}
