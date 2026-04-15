@@ -1,13 +1,30 @@
-// Items defined here are wired into command handlers by Task A13; silence
-// dead-code warnings in the meantime without touching the plan-specified API.
-#![allow(dead_code)]
-
 use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use syncor_core::progress::{ItemTotal, Phase, ProgressReporter};
+
+/// Format a byte count using 1024-scaled units (B / KiB / MiB / GiB / TiB).
+///
+/// Stage A: helper prepared for push/pull summary output. The Stage A summary
+/// only has a count-based form (files restored, snapshot id); Stage C (Task C4)
+/// enriches push summaries with `bytes_compressed` and will consume this.
+/// Kept self-contained to avoid pulling in another crate.
+#[allow(dead_code)] // consumed by Stage C summary enrichment
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{} B", bytes);
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{:.1} {}", value, UNITS[unit])
+}
 
 pub fn make_reporter(no_progress_flag: bool) -> Arc<dyn ProgressReporter> {
     let disabled = no_progress_flag
