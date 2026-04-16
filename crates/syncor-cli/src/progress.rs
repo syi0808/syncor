@@ -71,6 +71,15 @@ impl TerminalReporter {
             .expect("static template")
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
     }
+
+    fn count_style() -> ProgressStyle {
+        ProgressStyle::with_template(
+            "{spinner:.cyan} {msg} [{bar:30.cyan/blue}] {pos}/{len} ({percent}%)",
+        )
+        .expect("static template")
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+        .progress_chars("█▓▒░ ")
+    }
 }
 
 impl Default for TerminalReporter {
@@ -92,8 +101,15 @@ impl ProgressReporter for TerminalReporter {
                 b.enable_steady_tick(Duration::from_millis(100));
                 b
             }
-            ItemTotal::Count(_) | ItemTotal::Bytes { .. } => {
-                // Stage A: always spinner; Stage B/C extend this arm.
+            ItemTotal::Count(total) => {
+                let b = ProgressBar::new(total);
+                b.set_style(Self::count_style());
+                b.enable_steady_tick(Duration::from_millis(100));
+                b
+            }
+            ItemTotal::Bytes { .. } => {
+                // Stage B: render byte totals as a count fallback. Stage C
+                // replaces this with a byte/ETA bar.
                 let b = ProgressBar::new_spinner();
                 b.set_style(Self::spinner_style());
                 b.enable_steady_tick(Duration::from_millis(100));
@@ -104,8 +120,13 @@ impl ProgressReporter for TerminalReporter {
         *slot = Some(ActiveBar { phase, bar });
     }
 
-    fn phase_tick(&self, _items: u64, _bytes: u64) {
-        // Stage A: spinner animates on its own via steady_tick. No-op here.
+    fn phase_tick(&self, items: u64, _bytes: u64) {
+        let slot = self.active.lock().unwrap();
+        if let Some(active) = slot.as_ref() {
+            // For Count bars: inc items. For Unknown spinners: inc is a no-op
+            // on a spinner-style bar but also harmless. Bytes handled in Stage C.
+            active.bar.inc(items);
+        }
     }
 
     fn phase_end(&self, phase: Phase) {
