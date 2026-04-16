@@ -15,6 +15,17 @@ static LINE_RE: Lazy<Regex> = Lazy::new(|| {
     ).expect("static regex")
 });
 
+fn parse_bytes(value: &str, unit: &str) -> u64 {
+    let v: f64 = value.parse().unwrap_or(0.0);
+    let mult: f64 = match unit {
+        "KiB" | "KB" => 1024.0,
+        "MiB" | "MB" => 1024.0 * 1024.0,
+        "GiB" | "GB" => 1024.0 * 1024.0 * 1024.0,
+        _ => 1.0,
+    };
+    (v * mult) as u64
+}
+
 fn phase_for(name: &str) -> Phase {
     match name {
         "Enumerating" => Phase::GitEnumerate,
@@ -32,8 +43,6 @@ enum State {
     Active {
         phase: Phase,
         last_cur: u64,
-        // Reserved for Stage C (bytes accounting); unused in Stage B.
-        #[allow(dead_code)]
         last_bytes: u64,
     },
 }
@@ -78,15 +87,54 @@ impl<'a> GitProgressParser<'a> {
         let cur: u64 = caps.name("cur").unwrap().as_str().parse().unwrap_or(0);
         let total: u64 = caps.name("total").unwrap().as_str().parse().unwrap_or(0);
 
-        // Stage B: bytes captured in Stage C. We still read the bytes group but
-        // always pass 0 to phase_tick in Stage B. The capture is wired for C.
-        let _bytes_opt: Option<u64> = caps.name("bytes").map(|_| 0);
+        // Parse optional running byte count (only present on Writing/Receiving lines).
+        let bytes_now: Option<u64> = match (caps.name("bytes"), caps.name("unit")) {
+            (Some(b), Some(u)) => Some(parse_bytes(b.as_str(), u.as_str())),
+            _ => None,
+        };
 
-        self.switch_to(phase, ItemTotal::Count(total));
-        if let State::Active { last_cur, .. } = &mut self.state {
-            let delta = cur.saturating_sub(*last_cur);
-            if delta > 0 {
-                self.reporter.phase_tick(delta, 0);
+        let tracks_bytes = matches!(phase, Phase::GitWrite | Phase::GitReceive);
+
+        // Determine the ItemTotal to use when starting/switching into this phase.
+        // For Write/Receive: if bytes are present on this (first) line, use Bytes
+        // with an estimated total; otherwise fall back to Count(total).
+        let total_for_start = if tracks_bytes {
+            match bytes_now {
+                Some(b) => {
+                    let bytes_estimate = b * total / cur.max(1);
+                    ItemTotal::Bytes {
+                        items: total,
+                        bytes: bytes_estimate,
+                    }
+                }
+                None => ItemTotal::Count(total),
+            }
+        } else {
+            ItemTotal::Count(total)
+        };
+
+        self.switch_to(phase, total_for_start);
+        if let State::Active {
+            last_cur,
+            last_bytes,
+            ..
+        } = &mut self.state
+        {
+            let items_delta = cur.saturating_sub(*last_cur);
+            let bytes_delta = if tracks_bytes {
+                match bytes_now {
+                    Some(b) => {
+                        let d = b.saturating_sub(*last_bytes);
+                        *last_bytes = b;
+                        d
+                    }
+                    None => 0,
+                }
+            } else {
+                0
+            };
+            if items_delta > 0 || bytes_delta > 0 {
+                self.reporter.phase_tick(items_delta, bytes_delta);
             }
             *last_cur = cur;
         }

@@ -136,3 +136,39 @@ fn percent_ticks_accumulate_deltas() {
         .sum();
     assert_eq!(tick_sum, 10, "events: {:?}", events);
 }
+
+#[test]
+fn writing_objects_captures_bytes() {
+    let r = RecordingReporter::default();
+    let mut p = GitProgressParser::new(&r);
+    feed(
+        &mut p,
+        "Writing objects:  50% (5/10), 1.00 KiB\r\
+         Writing objects: 100% (10/10), 5.24 KiB | 5.24 MiB/s, done.\n",
+    );
+    let events = r.events.lock().unwrap();
+    // Start should carry Bytes(items=10, bytes=..) OR Count(10) — Stage C makes
+    // Writing use Bytes if byte group present on the first percent line.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.starts_with("start GitWrite")
+                && (e.contains("bytes=") || e.contains("count="))),
+        "events: {:?}",
+        events
+    );
+    // Tick deltas in bytes should sum to a value > 0
+    let byte_sum: u64 = events
+        .iter()
+        .filter_map(|e| {
+            e.strip_prefix("tick items+")?;
+            let parts: Vec<_> = e.split("bytes+").collect();
+            parts.get(1)?.parse::<u64>().ok()
+        })
+        .sum();
+    assert!(
+        byte_sum > 0,
+        "expected nonzero byte tick, events: {:?}",
+        events
+    );
+}
