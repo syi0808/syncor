@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, global = true)]
     no_progress: bool,
 
+    /// Show additional diagnostic output (unmatched git lines, etc.)
+    #[arg(long, short = 'v', global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -209,10 +213,11 @@ fn cmd_link(
     repo: Option<String>,
     name: Option<String>,
     no_progress: bool,
+    verbose: bool,
 ) -> Result<()> {
     let paths = load_paths()?;
     let mut registry = load_registry(&paths)?;
-    let reporter = make_reporter(no_progress);
+    let reporter = make_reporter(no_progress, verbose);
     let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let canonical = std::fs::canonicalize(&dir)
@@ -295,10 +300,11 @@ fn cmd_connect(
     dir_name: Option<String>,
     to: Option<PathBuf>,
     no_progress: bool,
+    verbose: bool,
 ) -> Result<()> {
     let paths = load_paths()?;
     let mut registry = load_registry(&paths)?;
-    let reporter = make_reporter(no_progress);
+    let reporter = make_reporter(no_progress, verbose);
     let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let transport = GitTransport::new(paths.clone());
@@ -814,11 +820,11 @@ fn cmd_daemon_status() -> Result<()> {
     Ok(())
 }
 
-fn cmd_push(dir: Option<PathBuf>, no_progress: bool) -> Result<()> {
+fn cmd_push(dir: Option<PathBuf>, no_progress: bool, verbose: bool) -> Result<()> {
     let paths = load_paths()?;
     let registry = load_registry(&paths)?;
     let engine = make_engine(&paths);
-    let reporter = make_reporter(no_progress);
+    let reporter = make_reporter(no_progress, verbose);
     let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let links: Vec<LinkInfo> = match dir {
@@ -855,11 +861,11 @@ fn cmd_push(dir: Option<PathBuf>, no_progress: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_pull(dir: Option<PathBuf>, no_progress: bool) -> Result<()> {
+fn cmd_pull(dir: Option<PathBuf>, no_progress: bool, verbose: bool) -> Result<()> {
     let paths = load_paths()?;
     let registry = load_registry(&paths)?;
     let engine = make_engine(&paths);
-    let reporter = make_reporter(no_progress);
+    let reporter = make_reporter(no_progress, verbose);
     let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let links: Vec<LinkInfo> = match dir {
@@ -906,9 +912,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let no_progress = cli.no_progress;
+    let verbose = cli.verbose;
     match cli.command {
-        Commands::Link { dir, repo, name } => cmd_link(dir, repo, name, no_progress),
-        Commands::Connect { repo, dir, to } => cmd_connect(repo, dir, to, no_progress),
+        Commands::Link { dir, repo, name } => cmd_link(dir, repo, name, no_progress, verbose),
+        Commands::Connect { repo, dir, to } => cmd_connect(repo, dir, to, no_progress, verbose),
         Commands::Status { dir } => cmd_status(dir),
         Commands::Unlink { dir } => cmd_unlink(dir),
         Commands::Disconnect { name, force } => cmd_disconnect(name, force),
@@ -922,7 +929,7 @@ async fn main() -> Result<()> {
             DaemonAction::Stop => cmd_daemon_stop(),
             DaemonAction::Status => cmd_daemon_status(),
         },
-        Commands::Push { dir } => cmd_push(dir, no_progress),
-        Commands::Pull { dir } => cmd_pull(dir, no_progress),
+        Commands::Push { dir } => cmd_push(dir, no_progress, verbose),
+        Commands::Pull { dir } => cmd_pull(dir, no_progress, verbose),
     }
 }

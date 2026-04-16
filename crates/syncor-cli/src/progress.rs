@@ -26,27 +26,32 @@ pub fn human_bytes(bytes: u64) -> String {
     format!("{:.1} {}", value, UNITS[unit])
 }
 
-pub fn make_reporter(no_progress_flag: bool) -> Arc<dyn ProgressReporter> {
+pub fn make_reporter(no_progress_flag: bool, verbose: bool) -> Arc<dyn ProgressReporter> {
     let disabled = no_progress_flag
         || std::env::var_os("SYNCOR_NO_PROGRESS").is_some()
         || !std::io::stderr().is_terminal();
     if disabled {
-        Arc::new(NullCliReporter)
+        Arc::new(NullCliReporter { verbose })
     } else {
-        Arc::new(TerminalReporter::new())
+        Arc::new(TerminalReporter::new(verbose))
     }
 }
 
-/// Fallback reporter for non-TTY / --no-progress. Prints completion lines only.
-pub struct NullCliReporter;
+/// Fallback reporter for non-TTY / --no-progress. Prints retry warnings
+/// unconditionally; other log messages only when `verbose` is set.
+pub struct NullCliReporter {
+    verbose: bool,
+}
 
 impl ProgressReporter for NullCliReporter {
     fn phase_start(&self, _: Phase, _: ItemTotal) {}
     fn phase_tick(&self, _: u64, _: u64) {}
     fn phase_end(&self, _: Phase) {}
     fn log(&self, msg: &str) {
-        // retry warnings and similar are worth seeing even without a bar
-        eprintln!("{}", msg);
+        // Retry warnings always surface; other lines only under --verbose.
+        if self.verbose || msg.starts_with("retry ") {
+            eprintln!("{}", msg);
+        }
     }
 }
 
@@ -57,12 +62,14 @@ struct ActiveBar {
 
 pub struct TerminalReporter {
     active: Mutex<Option<ActiveBar>>,
+    verbose: bool,
 }
 
 impl TerminalReporter {
-    pub fn new() -> Self {
+    pub fn new(verbose: bool) -> Self {
         Self {
             active: Mutex::new(None),
+            verbose,
         }
     }
 
@@ -84,7 +91,7 @@ impl TerminalReporter {
 
 impl Default for TerminalReporter {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -143,6 +150,10 @@ impl ProgressReporter for TerminalReporter {
     }
 
     fn log(&self, msg: &str) {
+        // Retry warnings always surface; other log lines only under --verbose.
+        if !self.verbose && !msg.starts_with("retry ") {
+            return;
+        }
         let slot = self.active.lock().unwrap();
         if let Some(active) = slot.as_ref() {
             active.bar.println(msg);
