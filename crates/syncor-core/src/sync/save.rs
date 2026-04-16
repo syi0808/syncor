@@ -45,7 +45,11 @@ impl SavePipeline {
         let mut index = FileIndex::open(&index_path)?;
 
         // 4. Find changed files (compare against index by size + mtime)
-        let detect_guard = PhaseGuard::new(reporter, Phase::DetectChanges, ItemTotal::Unknown);
+        let detect_guard = PhaseGuard::new(
+            reporter,
+            Phase::DetectChanges,
+            ItemTotal::Count(scanned.len() as u64),
+        );
         let mut changed_files = Vec::new();
         for sf in &scanned {
             if let Ok(Some(entry)) = index.get(&sf.relative_path) {
@@ -53,10 +57,12 @@ impl SavePipeline {
                     && entry.mtime_secs == sf.mtime_secs
                     && entry.mtime_nanos == sf.mtime_nanos
                 {
+                    reporter.phase_tick(1, 0);
                     continue;
                 }
             }
             changed_files.push(sf);
+            reporter.phase_tick(1, 0);
         }
         let files_hashed = changed_files.len();
 
@@ -74,7 +80,7 @@ impl SavePipeline {
         // Still emit a Hash phase start/end so consumers see a consistent
         // phase stream for every save run.
         if files_hashed == 0 && removed_paths.is_empty() {
-            PhaseGuard::new(reporter, Phase::Hash, ItemTotal::Unknown).end();
+            PhaseGuard::new(reporter, Phase::Hash, ItemTotal::Count(0)).end();
             let catalog = MetadataCatalog::open(&catalog_path)?;
             let latest = catalog.latest_snapshot()?;
             return Ok(SaveResult {
@@ -86,7 +92,11 @@ impl SavePipeline {
         }
 
         // 5. Hash, compress, and pack changed files
-        let hash_guard = PhaseGuard::new(reporter, Phase::Hash, ItemTotal::Unknown);
+        let hash_guard = PhaseGuard::new(
+            reporter,
+            Phase::Hash,
+            ItemTotal::Count(changed_files.len() as u64),
+        );
         let mut pack_writer = PackWriter::new(&packs_dir)?;
         let mut blob_locations: Vec<([u8; 16], BlobLocation)> = Vec::new();
         let mut new_entries: Vec<FileEntry> = Vec::new();
@@ -130,6 +140,7 @@ impl SavePipeline {
                 inode: sf.inode,
                 mode: sf.mode,
             });
+            reporter.phase_tick(1, 0);
         }
         hash_guard.end();
 
