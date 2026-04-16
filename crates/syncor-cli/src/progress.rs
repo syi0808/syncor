@@ -55,9 +55,16 @@ impl ProgressReporter for NullCliReporter {
     }
 }
 
+enum BarMode {
+    Spinner,
+    Count,
+    Bytes { items_total: u64, items_done: u64 },
+}
+
 struct ActiveBar {
     phase: Phase,
     bar: ProgressBar,
+    mode: BarMode,
 }
 
 pub struct TerminalReporter {
@@ -87,6 +94,15 @@ impl TerminalReporter {
         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
         .progress_chars("█▓▒░ ")
     }
+
+    fn bytes_style() -> ProgressStyle {
+        ProgressStyle::with_template(
+            "{spinner:.cyan} {msg} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ETA {eta}",
+        )
+        .expect("static template")
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+        .progress_chars("█▓▒░ ")
+    }
 }
 
 impl Default for TerminalReporter {
@@ -101,38 +117,56 @@ impl ProgressReporter for TerminalReporter {
         if let Some(prev) = slot.take() {
             prev.bar.finish_and_clear();
         }
-        let bar = match total {
+        let (bar, mode) = match total {
             ItemTotal::Unknown => {
                 let b = ProgressBar::new_spinner();
                 b.set_style(Self::spinner_style());
                 b.enable_steady_tick(Duration::from_millis(100));
-                b
+                (b, BarMode::Spinner)
             }
             ItemTotal::Count(total) => {
                 let b = ProgressBar::new(total);
                 b.set_style(Self::count_style());
                 b.enable_steady_tick(Duration::from_millis(100));
-                b
+                (b, BarMode::Count)
             }
-            ItemTotal::Bytes { .. } => {
-                // Stage B: render byte totals as a count fallback. Stage C
-                // replaces this with a byte/ETA bar.
-                let b = ProgressBar::new_spinner();
-                b.set_style(Self::spinner_style());
+            ItemTotal::Bytes { items, bytes } => {
+                let b = ProgressBar::new(bytes);
+                b.set_style(Self::bytes_style());
                 b.enable_steady_tick(Duration::from_millis(100));
-                b
+                (
+                    b,
+                    BarMode::Bytes {
+                        items_total: items,
+                        items_done: 0,
+                    },
+                )
             }
         };
         bar.set_message(phase.label());
-        *slot = Some(ActiveBar { phase, bar });
+        *slot = Some(ActiveBar { phase, bar, mode });
     }
 
-    fn phase_tick(&self, items: u64, _bytes: u64) {
-        let slot = self.active.lock().unwrap();
-        if let Some(active) = slot.as_ref() {
-            // For Count bars: inc items. For Unknown spinners: inc is a no-op
-            // on a spinner-style bar but also harmless. Bytes handled in Stage C.
-            active.bar.inc(items);
+    fn phase_tick(&self, items: u64, bytes: u64) {
+        let mut slot = self.active.lock().unwrap();
+        if let Some(active) = slot.as_mut() {
+            match &mut active.mode {
+                BarMode::Spinner => {}
+                BarMode::Count => active.bar.inc(items),
+                BarMode::Bytes {
+                    items_total,
+                    items_done,
+                } => {
+                    active.bar.inc(bytes);
+                    *items_done += items;
+                    active.bar.set_message(format!(
+                        "{} ({}/{} files)",
+                        active.phase.label(),
+                        items_done,
+                        items_total,
+                    ));
+                }
+            }
         }
     }
 
