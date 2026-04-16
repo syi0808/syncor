@@ -1,7 +1,9 @@
 pub mod git;
+pub mod git_progress;
 
 use crate::error::Result;
 use crate::link::LinkInfo;
+use crate::progress::ProgressReporter;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -29,9 +31,23 @@ pub enum PullResult {
 }
 
 pub trait SyncTransport: Send + Sync {
-    fn init_remote(&self, link: &LinkInfo) -> Result<()>;
-    fn push(&self, link: &LinkInfo, store_path: &Path) -> Result<PushResult>;
-    fn pull(&self, link: &LinkInfo, store_path: &Path) -> Result<PullResult>;
-    fn list_remote_links(&self, repo: &str) -> Result<Vec<RemoteLinkInfo>>;
-    fn has_remote_changes(&self, link: &LinkInfo) -> Result<bool>;
+    fn init_remote(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<()>;
+    fn push(
+        &self,
+        link: &LinkInfo,
+        store_path: &Path,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<PushResult>;
+    fn pull(
+        &self,
+        link: &LinkInfo,
+        store_path: &Path,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<PullResult>;
+    fn list_remote_links(
+        &self,
+        repo: &str,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<Vec<RemoteLinkInfo>>;
+    fn has_remote_changes(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<bool>;
 }

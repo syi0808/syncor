@@ -1,0 +1,7 @@
+remote: Enumerating objects: 5, done.        
+remote: Counting objects:  20% (1/5)        remote: Counting objects:  40% (2/5)        remote: Counting objects:  60% (3/5)        remote: Counting objects:  80% (4/5)        remote: Counting objects: 100% (5/5)        remote: Counting objects: 100% (5/5), done.        
+remote: Compressing objects:  50% (1/2)        remote: Compressing objects: 100% (2/2)        remote: Compressing objects: 100% (2/2), done.        
+remote: Total 3 (delta 1), reused 0 (delta 0), pack-reused 0        
+From file:///tmp/git-capture2/origin
+ * branch            main       -> FETCH_HEAD
+   45944b8..9023161  main       -> origin/main

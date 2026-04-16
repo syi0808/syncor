@@ -1,6 +1,7 @@
 use std::fs;
 use syncor_core::config::SyncorPaths;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::transport::git::GitTransport;
 use syncor_core::transport::{PushResult, SyncTransport};
 use tempfile::TempDir;
@@ -28,7 +29,7 @@ fn init_remote_clones_and_creates_structure() {
         poll_interval_secs: None,
     };
 
-    transport.init_remote(&link).unwrap();
+    transport.init_remote(&link, &NullReporter).unwrap();
 
     let repo_dir = paths.link_repo_dir(&link.id);
     assert!(repo_dir.exists());
@@ -52,7 +53,7 @@ fn push_commits_store_files() {
         poll_interval_secs: None,
     };
 
-    transport.init_remote(&link).unwrap();
+    transport.init_remote(&link, &NullReporter).unwrap();
 
     let store_dir = paths
         .link_repo_dir(&link.id)
@@ -61,6 +62,6 @@ fn push_commits_store_files() {
     fs::create_dir_all(&store_dir).unwrap();
     fs::write(store_dir.join("test.txt"), "data").unwrap();
 
-    let result = transport.push(&link, &store_dir).unwrap();
+    let result = transport.push(&link, &store_dir, &NullReporter).unwrap();
     assert!(matches!(result, PushResult::Success { .. }));
 }

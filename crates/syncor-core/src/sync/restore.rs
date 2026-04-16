@@ -1,4 +1,5 @@
 use crate::error::{Result, SyncorError};
+use crate::progress::{ItemTotal, Phase, PhaseGuard, ProgressReporter};
 use chkpt_core::scanner::scan_workspace;
 use chkpt_core::store::blob::bytes_to_hex;
 use chkpt_core::store::catalog::MetadataCatalog;
@@ -29,7 +30,12 @@ pub struct RestoreResult {
 pub struct RestorePipeline;
 
 impl RestorePipeline {
-    pub fn run(snapshot_id: &str, store_dir: &Path, target_dir: &Path) -> Result<RestoreResult> {
+    pub fn run(
+        snapshot_id: &str,
+        store_dir: &Path,
+        target_dir: &Path,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<RestoreResult> {
         // 1. Open MetadataCatalog
         let catalog_path = store_dir.join("catalog.sqlite");
         let catalog = MetadataCatalog::open(&catalog_path)?;
@@ -45,6 +51,15 @@ impl RestorePipeline {
         let manifest_paths: HashSet<String> = manifest.iter().map(|e| e.path.clone()).collect();
 
         // 4. Restore each file
+        let restore_total_bytes: u64 = manifest.iter().map(|e| e.size).sum();
+        let restore_guard = PhaseGuard::new(
+            reporter,
+            Phase::Restore,
+            ItemTotal::Bytes {
+                items: manifest.len() as u64,
+                bytes: restore_total_bytes,
+            },
+        );
         let mut files_restored = 0;
         for entry in &manifest {
             let hash_hex = bytes_to_hex(&entry.blob_hash);
@@ -62,11 +77,14 @@ impl RestorePipeline {
                 std::fs::set_permissions(&dest, perms)?;
             }
             files_restored += 1;
+            reporter.phase_tick(1, entry.size);
         }
+        restore_guard.end();
 
         // 5. Scan target_dir using the same scanner as save (respects .chkptignore etc.)
         //    and remove only scanned files not in the manifest. This preserves ignored
         //    files like .git/, .env, .chkptignore.
+        let cleanup_guard = PhaseGuard::new(reporter, Phase::Cleanup, ItemTotal::Unknown);
         let scanned = scan_workspace(target_dir, None)?;
         let mut files_removed = 0;
         for file in &scanned {
@@ -79,6 +97,7 @@ impl RestorePipeline {
 
         // 6. Clean up empty directories (but never the target_dir root itself)
         remove_empty_dirs(target_dir, target_dir)?;
+        cleanup_guard.end();
 
         Ok(RestoreResult {
             files_restored,

@@ -1,4 +1,5 @@
 use std::fs;
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::save::SavePipeline;
 use tempfile::TempDir;
 
@@ -12,7 +13,7 @@ fn save_creates_snapshot_for_new_files() {
     fs::create_dir(workspace.path().join("sub")).unwrap();
     fs::write(workspace.path().join("sub/nested.txt"), "nested").unwrap();
 
-    let result = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let result = SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
     assert!(!result.snapshot_id.is_empty());
     assert_eq!(result.files_scanned, 3);
     assert!(result.files_hashed > 0);
@@ -27,10 +28,10 @@ fn save_is_incremental_via_index() {
 
     fs::write(workspace.path().join("a.txt"), "aaa").unwrap();
 
-    let r1 = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let r1 = SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
     assert!(r1.files_hashed > 0);
 
-    let r2 = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let r2 = SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
     assert_eq!(r2.files_hashed, 0);
 }
 
@@ -40,9 +41,9 @@ fn save_detects_modified_file() {
     let store = TempDir::new().unwrap();
 
     fs::write(workspace.path().join("a.txt"), "version1").unwrap();
-    SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
 
     fs::write(workspace.path().join("a.txt"), "version2").unwrap();
-    let r2 = SavePipeline::run(workspace.path(), store.path(), None).unwrap();
+    let r2 = SavePipeline::run(workspace.path(), store.path(), None, &NullReporter).unwrap();
     assert_eq!(r2.files_hashed, 1);
 }

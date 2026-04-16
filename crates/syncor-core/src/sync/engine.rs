@@ -1,6 +1,7 @@
 use crate::config::SyncorPaths;
 use crate::error::{Result, SyncorError};
 use crate::link::LinkInfo;
+use crate::progress::{NullReporter, ProgressReporter};
 use crate::sync::catalog_merge::{checkpoint_wal, merge_catalogs};
 use crate::sync::conflict::{detect_conflicts, FileAction, ManifestMap};
 use crate::sync::save::SavePipeline;
@@ -63,6 +64,9 @@ pub struct SyncEngine {
 pub struct PushSyncResult {
     pub snapshot_id: Option<String>,
     pub pushed: bool,
+    pub files_hashed: usize,
+    pub bytes_source: u64,
+    pub bytes_compressed: u64,
 }
 
 #[derive(Debug)]
@@ -136,7 +140,9 @@ impl SyncEngine {
     }
 
     pub fn init_link(&self, link: &LinkInfo) -> Result<()> {
-        self.transport.init_remote(link)?;
+        // TODO(progress-display): accept a reporter when cmd_link/cmd_connect
+        // thread one through. Today no CLI path exposes progress here.
+        self.transport.init_remote(link, &NullReporter)?;
         let link_dir = self.paths.link_dir();
         std::fs::create_dir_all(&link_dir)?;
         Ok(())
@@ -207,7 +213,9 @@ impl SyncEngine {
         };
 
         use crate::sync::restore::RestorePipeline;
-        let result = RestorePipeline::run(&latest.id, &store_dir, target)?;
+        // TODO(progress-display): accept a reporter when cmd_connect/cmd_pull
+        // thread one through; today this helper runs without progress feedback.
+        let result = RestorePipeline::run(&latest.id, &store_dir, target, &NullReporter)?;
 
         Ok(MountOutcome {
             dir: target.to_path_buf(),
@@ -286,7 +294,7 @@ impl SyncEngine {
         })
     }
 
-    pub fn push(&self, link: &LinkInfo) -> Result<PushSyncResult> {
+    pub fn push(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<PushSyncResult> {
         debug_assert_eq!(
             link.local_dirs.len(),
             1,
@@ -298,7 +306,7 @@ impl SyncEngine {
         let store_dir = self.store_dir(link);
 
         // Save current workspace state into the store
-        let save_result = SavePipeline::run(link.primary_dir(), &store_dir, None)?;
+        let save_result = SavePipeline::run(link.primary_dir(), &store_dir, None, reporter)?;
 
         // Ensure syncor.toml lists this link
         self.ensure_syncor_toml(link)?;
@@ -310,7 +318,7 @@ impl SyncEngine {
         }
 
         // Push store to remote via transport
-        let push_result = self.transport.push(link, &store_dir)?;
+        let push_result = self.transport.push(link, &store_dir, reporter)?;
 
         let db = self.state_db()?;
         match push_result {
@@ -328,6 +336,9 @@ impl SyncEngine {
                 Ok(PushSyncResult {
                     snapshot_id: Some(save_result.snapshot_id),
                     pushed: true,
+                    files_hashed: save_result.files_hashed,
+                    bytes_source: save_result.bytes_source,
+                    bytes_compressed: save_result.bytes_compressed,
                 })
             }
             PushResult::Conflict { details } => {
@@ -343,14 +354,14 @@ impl SyncEngine {
     /// one mount to successfully reach the end of its action loop, even if that
     /// loop contained only deletes (`files_restored == 0`). See `restore_latest`
     /// for state-based semantics.
-    pub fn pull(&self, link: &LinkInfo) -> Result<PullSyncResult> {
+    pub fn pull(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<PullSyncResult> {
         let _lock = LinkLock::acquire(&self.paths, link)?;
 
         let store_dir = self.store_dir(link);
         let catalog_path = store_dir.join("catalog.sqlite");
 
         // Pull remote changes via transport
-        let pull_result = self.transport.pull(link, &store_dir)?;
+        let pull_result = self.transport.pull(link, &store_dir, reporter)?;
 
         match pull_result {
             PullResult::UpToDate => Ok(PullSyncResult {

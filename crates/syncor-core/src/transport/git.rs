@@ -1,13 +1,98 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::config::SyncorPaths;
 use crate::error::{Result, SyncorError};
 use crate::link::LinkInfo;
+use crate::progress::{ItemTotal, Phase, PhaseGuard, ProgressReporter};
 use crate::transport::{ConflictInfo, PullResult, PushResult, RemoteLinkInfo, SyncTransport};
 
+/// Run a network-facing git command, forwarding stderr lines verbatim to
+/// `reporter.log`. Stdout is discarded (none of our 5 network call sites
+/// inspect the child's stdout — `push` uses a subsequent `rev-parse`,
+/// `clone` produces empty stdout in practice, etc.). Discarding stdout
+/// also avoids a potential deadlock if git ever fills the stdout pipe
+/// buffer while we block reading stderr.
+///
+/// Returns `(exit_status, stderr_raw)` so callers can inspect stderr for
+/// existing error-classification logic (e.g. push's "non-fast-forward"
+/// detection).
+fn run_git_streaming(
+    dir: &Path,
+    args: &[&str],
+    reporter: &dyn ProgressReporter,
+) -> Result<(std::process::ExitStatus, String)> {
+    use std::io::BufReader;
+    let mut child = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| SyncorError::Transport(format!("git spawn: {}", e)))?;
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    // Live-parse stderr on a worker thread so `GitProgressParser` sees
+    // progress updates as git emits them (rather than after `wait()`).
+    // `thread::scope` lets the worker borrow `reporter: &dyn ProgressReporter`
+    // without a `'static` bound. Stdout stays `Stdio::null()` so git can't
+    // block on stdout backpressure while we read stderr (deadlock safety).
+    let stderr_raw: String = std::thread::scope(|s| {
+        let h = s.spawn(|| {
+            let mut raw = String::new();
+            let mut parser = crate::transport::git_progress::GitProgressParser::new(reporter);
+            let mut buf: Vec<u8> = Vec::new();
+            let mut reader = BufReader::new(stderr);
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                // Flush complete lines (split on \r or \n). A mid-UTF-8-char
+                // boundary inside `buf` is safe: we only decode slices that
+                // end at ASCII \r/\n, so multibyte chars are never split.
+                while let Some(pos) = buf.iter().position(|&b| b == b'\r' || b == b'\n') {
+                    let line = String::from_utf8_lossy(&buf[..pos]).into_owned();
+                    raw.push_str(&line);
+                    raw.push('\n');
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        parser.feed_line(trimmed);
+                    }
+                    buf.drain(..=pos);
+                }
+            }
+            // Flush any trailing content without a terminator.
+            if !buf.is_empty() {
+                let line = String::from_utf8_lossy(&buf).into_owned();
+                raw.push_str(&line);
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    parser.feed_line(trimmed);
+                }
+            }
+            parser.finish();
+            raw
+        });
+        h.join().unwrap_or_default()
+    });
+
+    let status = child
+        .wait()
+        .map_err(|e| SyncorError::Transport(format!("git wait: {}", e)))?;
+    Ok((status, stderr_raw))
+}
+
 /// Retry a closure up to `max_attempts` times with exponential backoff.
-fn retry_with_backoff<F, T>(max_attempts: u32, mut f: F) -> Result<T>
+fn retry_with_backoff<F, T>(
+    max_attempts: u32,
+    reporter: &dyn ProgressReporter,
+    mut f: F,
+) -> Result<T>
 where
     F: FnMut() -> Result<T>,
 {
@@ -35,6 +120,13 @@ where
                     delay,
                     e
                 );
+                reporter.log(&format!(
+                    "retry {}/{}: {} (waiting {}s)",
+                    attempt + 1,
+                    max_attempts,
+                    e,
+                    delay
+                ));
                 std::thread::sleep(std::time::Duration::from_secs(delay));
             }
         }
@@ -114,7 +206,7 @@ impl GitTransport {
 }
 
 impl SyncTransport for GitTransport {
-    fn init_remote(&self, link: &LinkInfo) -> Result<()> {
+    fn init_remote(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<()> {
         let repo_dir = self.repo_dir(link);
 
         if repo_dir.join(".git").exists() {
@@ -124,13 +216,16 @@ impl SyncTransport for GitTransport {
         std::fs::create_dir_all(&repo_dir)?;
 
         // Try clone first; fall back to init for empty repos.
-        let clone_result = Command::new("git")
-            .args(["clone", &link.repo, "."])
-            .current_dir(&repo_dir)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output();
+        // No outer PhaseGuard: GitProgressParser emits granular phase events
+        // (Enumerate → Count → Compress → Receive → Resolve) as git streams;
+        // an outer guard would be immediately preempted.
+        let clone_result = run_git_streaming(
+            &repo_dir,
+            &["clone", "--progress", &link.repo, "."],
+            reporter,
+        );
 
-        let cloned = matches!(clone_result, Ok(ref o) if o.status.success());
+        let cloned = matches!(clone_result, Ok((status, _)) if status.success());
         if !cloned {
             // Init + add remote for empty repos.
             Self::git(&repo_dir, &["init"])?;
@@ -164,12 +259,20 @@ impl SyncTransport for GitTransport {
         Ok(())
     }
 
-    fn push(&self, link: &LinkInfo, _store_path: &Path) -> Result<PushResult> {
+    fn push(
+        &self,
+        link: &LinkInfo,
+        _store_path: &Path,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<PushResult> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
         // Stage all.
-        Self::git(&repo_dir, &["add", "-A"])?;
+        {
+            let _guard = PhaseGuard::new(reporter, Phase::GitStage, ItemTotal::Unknown);
+            Self::git(&repo_dir, &["add", "-A"])?;
+        }
 
         // Check if there's anything to commit.
         let status = Self::git_ok(&repo_dir, &["status", "--porcelain"]);
@@ -181,63 +284,67 @@ impl SyncTransport for GitTransport {
             });
         }
 
-        Self::git(&repo_dir, &["commit", "-m", "syncor push"])?;
+        {
+            let _guard = PhaseGuard::new(reporter, Phase::GitCommit, ItemTotal::Unknown);
+            Self::git(&repo_dir, &["commit", "-m", "syncor push"])?;
+        }
 
-        // Push via CLI (uses system credential helpers).
-        retry_with_backoff(3, || {
-            let push_output = Command::new("git")
-                .args(["push", "-u", "origin", &branch])
-                .current_dir(&repo_dir)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output()
-                .map_err(|e| SyncorError::Transport(format!("push exec: {}", e)))?;
+        // Push via CLI (uses system credential helpers). GitProgressParser
+        // emits its own phase events during streaming, so no outer PhaseGuard.
+        retry_with_backoff(3, reporter, || {
+            let (status, stderr_raw) = run_git_streaming(
+                &repo_dir,
+                &["push", "--progress", "-u", "origin", &branch],
+                reporter,
+            )?;
 
-            if push_output.status.success() {
+            if status.success() {
                 let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
                 Ok(PushResult::Success {
                     revision: rev.trim().to_string(),
                 })
+            } else if stderr_raw.contains("non-fast-forward") || stderr_raw.contains("rejected") {
+                Ok(PushResult::Conflict {
+                    details: ConflictInfo {
+                        message: stderr_raw.trim().to_string(),
+                    },
+                })
             } else {
-                let stderr = String::from_utf8_lossy(&push_output.stderr).to_string();
-                if stderr.contains("non-fast-forward") || stderr.contains("rejected") {
-                    Ok(PushResult::Conflict {
-                        details: ConflictInfo {
-                            message: stderr.trim().to_string(),
-                        },
-                    })
-                } else {
-                    Err(SyncorError::Transport(format!(
-                        "push failed: {}",
-                        stderr.trim()
-                    )))
-                }
+                Err(SyncorError::Transport(format!(
+                    "push failed: {}",
+                    stderr_raw.trim()
+                )))
             }
         })
     }
 
-    fn pull(&self, link: &LinkInfo, _store_path: &Path) -> Result<PullResult> {
+    fn pull(
+        &self,
+        link: &LinkInfo,
+        _store_path: &Path,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<PullResult> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
         // Record current HEAD before fetch.
         let head_before = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
 
-        // Fetch via CLI.
-        retry_with_backoff(3, || {
-            let fetch_output = Command::new("git")
-                .args(["fetch", "origin", &branch])
-                .current_dir(&repo_dir)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output()
-                .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
+        // Fetch via CLI. GitProgressParser emits granular phase events; no
+        // outer guard (would be immediately preempted).
+        retry_with_backoff(3, reporter, || {
+            let (status, stderr_raw) = run_git_streaming(
+                &repo_dir,
+                &["fetch", "--progress", "origin", &branch],
+                reporter,
+            )?;
 
-            if fetch_output.status.success() {
+            if status.success() {
                 Ok(())
             } else {
-                let stderr = String::from_utf8_lossy(&fetch_output.stderr).to_string();
                 Err(SyncorError::Transport(format!(
                     "fetch failed: {}",
-                    stderr.trim()
+                    stderr_raw.trim()
                 )))
             }
         })?;
@@ -251,12 +358,15 @@ impl SyncTransport for GitTransport {
         }
 
         // Try fast-forward merge.
-        let merge_output = Command::new("git")
-            .args(["merge", "--ff-only", &remote_ref])
-            .current_dir(&repo_dir)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| SyncorError::Transport(format!("merge exec: {}", e)))?;
+        let merge_output = {
+            let _guard = PhaseGuard::new(reporter, Phase::Merge, ItemTotal::Unknown);
+            Command::new("git")
+                .args(["merge", "--ff-only", &remote_ref])
+                .current_dir(&repo_dir)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| SyncorError::Transport(format!("merge exec: {}", e)))?
+        };
 
         if merge_output.status.success() {
             let rev = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
@@ -273,17 +383,22 @@ impl SyncTransport for GitTransport {
         }
     }
 
-    fn list_remote_links(&self, repo_url: &str) -> Result<Vec<RemoteLinkInfo>> {
+    fn list_remote_links(
+        &self,
+        repo_url: &str,
+        reporter: &dyn ProgressReporter,
+    ) -> Result<Vec<RemoteLinkInfo>> {
         let tmp = tempfile::tempdir()?;
 
-        let clone_output = Command::new("git")
-            .args(["clone", "--depth=1", repo_url, "."])
-            .current_dir(tmp.path())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output();
+        // Parser owns the phase lifecycle; no outer guard.
+        let clone_result = run_git_streaming(
+            tmp.path(),
+            &["clone", "--progress", "--depth=1", repo_url, "."],
+            reporter,
+        );
 
-        match clone_output {
-            Ok(o) if o.status.success() => {}
+        match clone_result {
+            Ok((status, _)) if status.success() => {}
             _ => return Ok(vec![]),
         }
 
@@ -319,26 +434,24 @@ impl SyncTransport for GitTransport {
             .collect())
     }
 
-    fn has_remote_changes(&self, link: &LinkInfo) -> Result<bool> {
+    fn has_remote_changes(&self, link: &LinkInfo, reporter: &dyn ProgressReporter) -> Result<bool> {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
-        // Fetch with retry.
-        retry_with_backoff(3, || {
-            let fetch_output = Command::new("git")
-                .args(["fetch", "origin", &branch])
-                .current_dir(&repo_dir)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output()
-                .map_err(|e| SyncorError::Transport(format!("fetch exec: {}", e)))?;
+        // Fetch with retry. Parser owns the phase lifecycle.
+        retry_with_backoff(3, reporter, || {
+            let (status, stderr_raw) = run_git_streaming(
+                &repo_dir,
+                &["fetch", "--progress", "origin", &branch],
+                reporter,
+            )?;
 
-            if fetch_output.status.success() {
+            if status.success() {
                 Ok(())
             } else {
-                let stderr = String::from_utf8_lossy(&fetch_output.stderr).to_string();
                 Err(SyncorError::Transport(format!(
                     "fetch failed: {}",
-                    stderr.trim()
+                    stderr_raw.trim()
                 )))
             }
         })?;

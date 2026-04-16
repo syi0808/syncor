@@ -6,10 +6,15 @@ use clap::{Parser, Subcommand};
 use syncor_core::config::{LinksRegistry, SyncorConfig, SyncorPaths};
 use syncor_core::daemon::manager::DaemonManager;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::ProgressReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::sync::state::StateDb;
 use syncor_core::transport::git::GitTransport;
 use syncor_core::transport::SyncTransport;
+
+mod progress;
+
+use progress::{human_bytes, make_reporter};
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -18,6 +23,14 @@ use syncor_core::transport::SyncTransport;
 #[derive(Parser)]
 #[command(name = "syncor", version, about = "Cross-machine directory sync")]
 struct Cli {
+    /// Disable progress bars/spinners (also disabled when stderr is not a TTY)
+    #[arg(long, global = true)]
+    no_progress: bool,
+
+    /// Show additional diagnostic output (unmatched git lines, etc.)
+    #[arg(long, short = 'v', global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -195,9 +208,17 @@ fn rollback(paths: &SyncorPaths, registry: &mut LinksRegistry, kind: RollbackKin
 // Command implementations
 // ---------------------------------------------------------------------------
 
-fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<()> {
+fn cmd_link(
+    dir: PathBuf,
+    repo: Option<String>,
+    name: Option<String>,
+    no_progress: bool,
+    verbose: bool,
+) -> Result<()> {
     let paths = load_paths()?;
     let mut registry = load_registry(&paths)?;
+    let reporter = make_reporter(no_progress, verbose);
+    let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let canonical = std::fs::canonicalize(&dir)
         .with_context(|| format!("cannot resolve path: {}", dir.display()))?;
@@ -252,7 +273,7 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     println!("Linked {} -> {}", canonical.display(), repo_url);
     println!("Performing initial push...");
 
-    match engine.push(&info) {
+    match engine.push(&info, reporter_ref) {
         Ok(result) => {
             if result.pushed {
                 println!(
@@ -274,13 +295,21 @@ fn cmd_link(dir: PathBuf, repo: Option<String>, name: Option<String>) -> Result<
     Ok(())
 }
 
-fn cmd_connect(repo: String, dir_name: Option<String>, to: Option<PathBuf>) -> Result<()> {
+fn cmd_connect(
+    repo: String,
+    dir_name: Option<String>,
+    to: Option<PathBuf>,
+    no_progress: bool,
+    verbose: bool,
+) -> Result<()> {
     let paths = load_paths()?;
     let mut registry = load_registry(&paths)?;
+    let reporter = make_reporter(no_progress, verbose);
+    let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let transport = GitTransport::new(paths.clone());
     let remote_links = transport
-        .list_remote_links(&repo)
+        .list_remote_links(&repo, reporter_ref)
         .context("failed to list remote links")?;
 
     if remote_links.is_empty() {
@@ -791,10 +820,12 @@ fn cmd_daemon_status() -> Result<()> {
     Ok(())
 }
 
-fn cmd_push(dir: Option<PathBuf>) -> Result<()> {
+fn cmd_push(dir: Option<PathBuf>, no_progress: bool, verbose: bool) -> Result<()> {
     let paths = load_paths()?;
     let registry = load_registry(&paths)?;
     let engine = make_engine(&paths);
+    let reporter = make_reporter(no_progress, verbose);
+    let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let links: Vec<LinkInfo> = match dir {
         Some(d) => vec![find_link_by_dir(&registry, &d)?.clone()],
@@ -811,29 +842,45 @@ fn cmd_push(dir: Option<PathBuf>) -> Result<()> {
     }
 
     for link in &links {
-        print!("Pushing {}... ", link.name);
-        match engine.push(link) {
+        match engine.push(link, reporter_ref) {
             Ok(result) => {
                 if result.pushed {
                     println!(
-                        "done (snapshot: {})",
+                        "✓ Push complete: {} (snapshot {})",
+                        link.name,
                         result.snapshot_id.as_deref().unwrap_or("n/a")
                     );
+                    if result.files_hashed > 0 {
+                        let ratio = if result.bytes_source > 0 {
+                            (result.bytes_compressed as f64 / result.bytes_source as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        println!(
+                            "  {} files, {} → {} ({:.0}% of source)",
+                            result.files_hashed,
+                            human_bytes(result.bytes_source),
+                            human_bytes(result.bytes_compressed),
+                            ratio,
+                        );
+                    }
                 } else {
-                    println!("nothing to push.");
+                    println!("✓ {}: nothing to push.", link.name);
                 }
             }
-            Err(e) => println!("error: {e}"),
+            Err(e) => eprintln!("✗ {}: {e}", link.name),
         }
     }
 
     Ok(())
 }
 
-fn cmd_pull(dir: Option<PathBuf>) -> Result<()> {
+fn cmd_pull(dir: Option<PathBuf>, no_progress: bool, verbose: bool) -> Result<()> {
     let paths = load_paths()?;
     let registry = load_registry(&paths)?;
     let engine = make_engine(&paths);
+    let reporter = make_reporter(no_progress, verbose);
+    let reporter_ref: &dyn ProgressReporter = &*reporter;
 
     let links: Vec<LinkInfo> = match dir {
         Some(d) => vec![find_link_by_dir(&registry, &d)?.clone()],
@@ -850,16 +897,18 @@ fn cmd_pull(dir: Option<PathBuf>) -> Result<()> {
     }
 
     for link in &links {
-        print!("Pulling {}... ", link.name);
-        match engine.pull(link) {
+        match engine.pull(link, reporter_ref) {
             Ok(result) => {
                 if result.restored {
-                    println!("done ({} files restored).", result.files_restored);
+                    println!(
+                        "✓ Pull complete: {} ({} files restored)",
+                        link.name, result.files_restored
+                    );
                 } else {
-                    println!("already up to date.");
+                    println!("✓ {}: already up to date.", link.name);
                 }
             }
-            Err(e) => println!("error: {e}"),
+            Err(e) => eprintln!("✗ {}: {e}", link.name),
         }
     }
 
@@ -876,9 +925,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    let no_progress = cli.no_progress;
+    let verbose = cli.verbose;
     match cli.command {
-        Commands::Link { dir, repo, name } => cmd_link(dir, repo, name),
-        Commands::Connect { repo, dir, to } => cmd_connect(repo, dir, to),
+        Commands::Link { dir, repo, name } => cmd_link(dir, repo, name, no_progress, verbose),
+        Commands::Connect { repo, dir, to } => cmd_connect(repo, dir, to, no_progress, verbose),
         Commands::Status { dir } => cmd_status(dir),
         Commands::Unlink { dir } => cmd_unlink(dir),
         Commands::Disconnect { name, force } => cmd_disconnect(name, force),
@@ -892,7 +943,7 @@ async fn main() -> Result<()> {
             DaemonAction::Stop => cmd_daemon_stop(),
             DaemonAction::Status => cmd_daemon_status(),
         },
-        Commands::Push { dir } => cmd_push(dir),
-        Commands::Pull { dir } => cmd_pull(dir),
+        Commands::Push { dir } => cmd_push(dir, no_progress, verbose),
+        Commands::Pull { dir } => cmd_pull(dir, no_progress, verbose),
     }
 }

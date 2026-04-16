@@ -1,6 +1,7 @@
 use std::fs;
 use syncor_core::config::SyncorPaths;
 use syncor_core::link::{LinkId, LinkInfo, LinkMode};
+use syncor_core::progress::NullReporter;
 use syncor_core::sync::engine::SyncEngine;
 use syncor_core::transport::git::GitTransport;
 use tempfile::TempDir;
@@ -47,7 +48,7 @@ fn e2e_push_pull_roundtrip() {
     let transport_a = GitTransport::new(paths_a.clone());
     let engine_a = SyncEngine::new(paths_a, Box::new(transport_a));
     engine_a.init_link(&link_a).unwrap();
-    let push_result = engine_a.push(&link_a).unwrap();
+    let push_result = engine_a.push(&link_a, &NullReporter).unwrap();
     assert!(push_result.pushed, "Machine A initial push should succeed");
     assert!(
         push_result.snapshot_id.is_some(),
@@ -108,11 +109,11 @@ fn e2e_push_pull_roundtrip() {
     )
     .unwrap();
 
-    let push_result2 = engine_a.push(&link_a).unwrap();
+    let push_result2 = engine_a.push(&link_a, &NullReporter).unwrap();
     assert!(push_result2.pushed, "Machine A second push should succeed");
 
     // --- Machine B: pull again, assert updated content ---
-    let pull_result2 = engine_b.pull(&link_b).unwrap();
+    let pull_result2 = engine_b.pull(&link_b, &NullReporter).unwrap();
     assert!(
         pull_result2.restored,
         "Machine B second pull should restore updated file"

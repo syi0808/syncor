@@ -1,4 +1,4 @@
-use syncor_core::sync::state::{ConflictRecord, StateDb, SyncLogEntry, SyncState};
+use syncor_core::sync::state::{ConflictRecord, StateDb, SyncState};
 use tempfile::TempDir;
 
 #[test]
