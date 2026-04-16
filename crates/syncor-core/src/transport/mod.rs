@@ -1,4 +1,5 @@
 pub mod git;
+pub mod git_progress;
 
 use crate::error::Result;
 use crate::link::LinkInfo;
