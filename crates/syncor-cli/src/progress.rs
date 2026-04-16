@@ -60,6 +60,12 @@ struct ActiveBar {
     phase: Phase,
     bar: ProgressBar,
     mode: BarMode,
+    /// Set to true the first time `phase_tick` moves this bar. A phase that
+    /// ends without ticking was preempted (e.g. the outer GitWrite guard is
+    /// immediately replaced by the parser's GitEnumerate phase) and should
+    /// not emit a "✓ {label}" line. Spinner-mode phases print unconditionally
+    /// since they have no fill state to indicate activity.
+    ticked: bool,
 }
 
 pub struct TerminalReporter {
@@ -139,7 +145,12 @@ impl ProgressReporter for TerminalReporter {
             }
         };
         bar.set_message(phase.label());
-        *slot = Some(ActiveBar { phase, bar, mode });
+        *slot = Some(ActiveBar {
+            phase,
+            bar,
+            mode,
+            ticked: false,
+        });
     }
 
     fn phase_tick(&self, items: u64, bytes: u64) {
@@ -162,6 +173,7 @@ impl ProgressReporter for TerminalReporter {
                     ));
                 }
             }
+            active.ticked = true;
         }
     }
 
@@ -170,7 +182,14 @@ impl ProgressReporter for TerminalReporter {
         if let Some(active) = slot.take() {
             if active.phase == phase {
                 active.bar.finish_and_clear();
-                eprintln!("✓ {}", phase.label());
+                // Only print the "✓" line when the phase actually did work.
+                // Spinner-mode phases (Unknown) always print since they have
+                // no fill state; Count/Bytes phases print only if they ticked,
+                // which suppresses the noise from preempted outer guards.
+                let should_announce = matches!(active.mode, BarMode::Spinner) || active.ticked;
+                if should_announce {
+                    eprintln!("✓ {}", phase.label());
+                }
             } else {
                 // Idempotent: some other phase is active; leave it running.
                 *slot = Some(active);

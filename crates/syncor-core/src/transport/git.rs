@@ -216,14 +216,14 @@ impl SyncTransport for GitTransport {
         std::fs::create_dir_all(&repo_dir)?;
 
         // Try clone first; fall back to init for empty repos.
-        let clone_result = {
-            let _guard = PhaseGuard::new(reporter, Phase::GitReceive, ItemTotal::Unknown);
-            run_git_streaming(
-                &repo_dir,
-                &["clone", "--progress", &link.repo, "."],
-                reporter,
-            )
-        };
+        // No outer PhaseGuard: GitProgressParser emits granular phase events
+        // (Enumerate → Count → Compress → Receive → Resolve) as git streams;
+        // an outer guard would be immediately preempted.
+        let clone_result = run_git_streaming(
+            &repo_dir,
+            &["clone", "--progress", &link.repo, "."],
+            reporter,
+        );
 
         let cloned = matches!(clone_result, Ok((status, _)) if status.success());
         if !cloned {
@@ -289,8 +289,8 @@ impl SyncTransport for GitTransport {
             Self::git(&repo_dir, &["commit", "-m", "syncor push"])?;
         }
 
-        // Push via CLI (uses system credential helpers).
-        let _guard = PhaseGuard::new(reporter, Phase::GitWrite, ItemTotal::Unknown);
+        // Push via CLI (uses system credential helpers). GitProgressParser
+        // emits its own phase events during streaming, so no outer PhaseGuard.
         retry_with_backoff(3, reporter, || {
             let (status, stderr_raw) = run_git_streaming(
                 &repo_dir,
@@ -330,26 +330,24 @@ impl SyncTransport for GitTransport {
         // Record current HEAD before fetch.
         let head_before = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
 
-        // Fetch via CLI.
-        {
-            let _guard = PhaseGuard::new(reporter, Phase::GitReceive, ItemTotal::Unknown);
-            retry_with_backoff(3, reporter, || {
-                let (status, stderr_raw) = run_git_streaming(
-                    &repo_dir,
-                    &["fetch", "--progress", "origin", &branch],
-                    reporter,
-                )?;
+        // Fetch via CLI. GitProgressParser emits granular phase events; no
+        // outer guard (would be immediately preempted).
+        retry_with_backoff(3, reporter, || {
+            let (status, stderr_raw) = run_git_streaming(
+                &repo_dir,
+                &["fetch", "--progress", "origin", &branch],
+                reporter,
+            )?;
 
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(SyncorError::Transport(format!(
-                        "fetch failed: {}",
-                        stderr_raw.trim()
-                    )))
-                }
-            })?;
-        }
+            if status.success() {
+                Ok(())
+            } else {
+                Err(SyncorError::Transport(format!(
+                    "fetch failed: {}",
+                    stderr_raw.trim()
+                )))
+            }
+        })?;
 
         // Compare local vs remote.
         let remote_ref = format!("origin/{}", branch);
@@ -392,14 +390,12 @@ impl SyncTransport for GitTransport {
     ) -> Result<Vec<RemoteLinkInfo>> {
         let tmp = tempfile::tempdir()?;
 
-        let clone_result = {
-            let _guard = PhaseGuard::new(reporter, Phase::GitReceive, ItemTotal::Unknown);
-            run_git_streaming(
-                tmp.path(),
-                &["clone", "--progress", "--depth=1", repo_url, "."],
-                reporter,
-            )
-        };
+        // Parser owns the phase lifecycle; no outer guard.
+        let clone_result = run_git_streaming(
+            tmp.path(),
+            &["clone", "--progress", "--depth=1", repo_url, "."],
+            reporter,
+        );
 
         match clone_result {
             Ok((status, _)) if status.success() => {}
@@ -442,26 +438,23 @@ impl SyncTransport for GitTransport {
         let repo_dir = self.repo_dir(link);
         let branch = Self::primary_branch(&repo_dir);
 
-        // Fetch with retry.
-        {
-            let _guard = PhaseGuard::new(reporter, Phase::GitReceive, ItemTotal::Unknown);
-            retry_with_backoff(3, reporter, || {
-                let (status, stderr_raw) = run_git_streaming(
-                    &repo_dir,
-                    &["fetch", "--progress", "origin", &branch],
-                    reporter,
-                )?;
+        // Fetch with retry. Parser owns the phase lifecycle.
+        retry_with_backoff(3, reporter, || {
+            let (status, stderr_raw) = run_git_streaming(
+                &repo_dir,
+                &["fetch", "--progress", "origin", &branch],
+                reporter,
+            )?;
 
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(SyncorError::Transport(format!(
-                        "fetch failed: {}",
-                        stderr_raw.trim()
-                    )))
-                }
-            })?;
-        }
+            if status.success() {
+                Ok(())
+            } else {
+                Err(SyncorError::Transport(format!(
+                    "fetch failed: {}",
+                    stderr_raw.trim()
+                )))
+            }
+        })?;
 
         let local = Self::git_ok(&repo_dir, &["rev-parse", "HEAD"]);
         let remote = Self::git_ok(&repo_dir, &["rev-parse", &format!("origin/{}", branch)]);
