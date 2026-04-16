@@ -6,12 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use syncor_core::progress::{ItemTotal, Phase, ProgressReporter};
 
 /// Format a byte count using 1024-scaled units (B / KiB / MiB / GiB / TiB).
-///
-/// Stage A: helper prepared for push/pull summary output. The Stage A summary
-/// only has a count-based form (files restored, snapshot id); Stage C (Task C4)
-/// enriches push summaries with `bytes_compressed` and will consume this.
 /// Kept self-contained to avoid pulling in another crate.
-#[allow(dead_code)] // consumed by Stage C summary enrichment
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {

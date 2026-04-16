@@ -64,6 +64,9 @@ pub struct SyncEngine {
 pub struct PushSyncResult {
     pub snapshot_id: Option<String>,
     pub pushed: bool,
+    pub files_hashed: usize,
+    pub bytes_source: u64,
+    pub bytes_compressed: u64,
 }
 
 #[derive(Debug)]
@@ -333,6 +336,9 @@ impl SyncEngine {
                 Ok(PushSyncResult {
                     snapshot_id: Some(save_result.snapshot_id),
                     pushed: true,
+                    files_hashed: save_result.files_hashed,
+                    bytes_source: save_result.bytes_source,
+                    bytes_compressed: save_result.bytes_compressed,
                 })
             }
             PushResult::Conflict { details } => {

@@ -14,7 +14,7 @@ use syncor_core::transport::SyncTransport;
 
 mod progress;
 
-use progress::make_reporter;
+use progress::{human_bytes, make_reporter};
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -850,6 +850,20 @@ fn cmd_push(dir: Option<PathBuf>, no_progress: bool, verbose: bool) -> Result<()
                         link.name,
                         result.snapshot_id.as_deref().unwrap_or("n/a")
                     );
+                    if result.files_hashed > 0 {
+                        let ratio = if result.bytes_source > 0 {
+                            (result.bytes_compressed as f64 / result.bytes_source as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        println!(
+                            "  {} files, {} → {} ({:.0}% of source)",
+                            result.files_hashed,
+                            human_bytes(result.bytes_source),
+                            human_bytes(result.bytes_compressed),
+                            ratio,
+                        );
+                    }
                 } else {
                     println!("✓ {}: nothing to push.", link.name);
                 }

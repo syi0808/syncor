@@ -15,6 +15,7 @@ pub struct SaveResult {
     pub snapshot_id: String,
     pub files_scanned: usize,
     pub files_hashed: usize,
+    pub bytes_source: u64,
     pub bytes_compressed: u64,
 }
 
@@ -87,6 +88,7 @@ impl SavePipeline {
                 snapshot_id: latest.map(|s| s.id).unwrap_or_default(),
                 files_scanned,
                 files_hashed: 0,
+                bytes_source: 0,
                 bytes_compressed: 0,
             });
         }
@@ -224,6 +226,7 @@ impl SavePipeline {
             snapshot_id,
             files_scanned,
             files_hashed,
+            bytes_source: hash_total_bytes,
             bytes_compressed,
         })
     }
