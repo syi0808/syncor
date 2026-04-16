@@ -51,10 +51,14 @@ impl RestorePipeline {
         let manifest_paths: HashSet<String> = manifest.iter().map(|e| e.path.clone()).collect();
 
         // 4. Restore each file
+        let restore_total_bytes: u64 = manifest.iter().map(|e| e.size).sum();
         let restore_guard = PhaseGuard::new(
             reporter,
             Phase::Restore,
-            ItemTotal::Count(manifest.len() as u64),
+            ItemTotal::Bytes {
+                items: manifest.len() as u64,
+                bytes: restore_total_bytes,
+            },
         );
         let mut files_restored = 0;
         for entry in &manifest {
@@ -73,7 +77,7 @@ impl RestorePipeline {
                 std::fs::set_permissions(&dest, perms)?;
             }
             files_restored += 1;
-            reporter.phase_tick(1, 0);
+            reporter.phase_tick(1, entry.size);
         }
         restore_guard.end();
 

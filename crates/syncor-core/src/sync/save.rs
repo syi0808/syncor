@@ -92,10 +92,14 @@ impl SavePipeline {
         }
 
         // 5. Hash, compress, and pack changed files
+        let hash_total_bytes: u64 = changed_files.iter().map(|sf| sf.size).sum();
         let hash_guard = PhaseGuard::new(
             reporter,
             Phase::Hash,
-            ItemTotal::Count(changed_files.len() as u64),
+            ItemTotal::Bytes {
+                items: changed_files.len() as u64,
+                bytes: hash_total_bytes,
+            },
         );
         let mut pack_writer = PackWriter::new(&packs_dir)?;
         let mut blob_locations: Vec<([u8; 16], BlobLocation)> = Vec::new();
@@ -140,7 +144,7 @@ impl SavePipeline {
                 inode: sf.inode,
                 mode: sf.mode,
             });
-            reporter.phase_tick(1, 0);
+            reporter.phase_tick(1, sf.size);
         }
         hash_guard.end();
 
