@@ -23,6 +23,7 @@ fn run_git_streaming(
     args: &[&str],
     reporter: &dyn ProgressReporter,
 ) -> Result<(std::process::ExitStatus, String)> {
+    use std::io::BufReader;
     let mut child = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -32,29 +33,57 @@ fn run_git_streaming(
         .spawn()
         .map_err(|e| SyncorError::Transport(format!("git spawn: {}", e)))?;
 
-    let mut stderr = child.stderr.take().expect("piped stderr");
-
-    // Read stderr to EOF on the current thread. Safe against deadlock
-    // because stdout is /dev/null — git can't block on stdout backpressure.
-    let mut raw_bytes = Vec::new();
-    let _ = stderr.read_to_end(&mut raw_bytes);
-    let stderr_raw = String::from_utf8_lossy(&raw_bytes).into_owned();
+    let stderr = child.stderr.take().expect("piped stderr");
+    // Live-parse stderr on a worker thread so `GitProgressParser` sees
+    // progress updates as git emits them (rather than after `wait()`).
+    // `thread::scope` lets the worker borrow `reporter: &dyn ProgressReporter`
+    // without a `'static` bound. Stdout stays `Stdio::null()` so git can't
+    // block on stdout backpressure while we read stderr (deadlock safety).
+    let stderr_raw: String = std::thread::scope(|s| {
+        let h = s.spawn(|| {
+            let mut raw = String::new();
+            let mut parser = crate::transport::git_progress::GitProgressParser::new(reporter);
+            let mut buf: Vec<u8> = Vec::new();
+            let mut reader = BufReader::new(stderr);
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                // Flush complete lines (split on \r or \n). A mid-UTF-8-char
+                // boundary inside `buf` is safe: we only decode slices that
+                // end at ASCII \r/\n, so multibyte chars are never split.
+                while let Some(pos) = buf.iter().position(|&b| b == b'\r' || b == b'\n') {
+                    let line = String::from_utf8_lossy(&buf[..pos]).into_owned();
+                    raw.push_str(&line);
+                    raw.push('\n');
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        parser.feed_line(trimmed);
+                    }
+                    buf.drain(..=pos);
+                }
+            }
+            // Flush any trailing content without a terminator.
+            if !buf.is_empty() {
+                let line = String::from_utf8_lossy(&buf).into_owned();
+                raw.push_str(&line);
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    parser.feed_line(trimmed);
+                }
+            }
+            parser.finish();
+            raw
+        });
+        h.join().unwrap_or_default()
+    });
 
     let status = child
         .wait()
         .map_err(|e| SyncorError::Transport(format!("git wait: {}", e)))?;
-
-    // Stage A: forward each stderr line (split on both \r and \n, git uses
-    // \r for in-place line updates) through reporter.log. Stage B replaces
-    // this loop with a live `GitProgressParser` running during the read,
-    // but the Stage A version already has all the data we need post-wait.
-    for line in stderr_raw.split(['\r', '\n']) {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            reporter.log(trimmed);
-        }
-    }
-
     Ok((status, stderr_raw))
 }
 
